@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "dependency-injection-proto"
+version = "0.0.1"
+description = "Prototype of Python dependency injection library"
+authors = ["Daniel Daniels <danields761@gmail.com>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+
+[tool.poetry.dev-dependencies]
+pytest = "^6.2.1"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+
+[tool.black]
+line-length = 79
+skip-string-normalization = true
+target-version = ["py38"]
+
+[tool.isort]
+profile = "black"
+line_length = 79
+known_first_party = ["publishing", "migrations", "tests"]
