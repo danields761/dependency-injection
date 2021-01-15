@@ -1,31 +1,31 @@
-from typing import TypeVar, Generic, Awaitable
+from typing import TypeVar, Generic, Awaitable, Any
 
 T = TypeVar('T')
 
 
-class BaseProvider(Generic[T]):
+class BaseFactoryWrapper(Generic[T]):
     pass
 
 
-class Provider(BaseProvider[T]):
-    def provide(self) -> T:
+class FactoryWrapper(BaseFactoryWrapper[T]):
+    def provide(self, *args: Any, **kwargs: Any) -> T:
         pass
 
     def finalize(self) -> None:
         pass
 
 
-class ContextManagerProvider(Provider[T]):
+class ContextManagerFactoryWrapper(FactoryWrapper[T]):
     pass
 
 
-class AsyncProvider(BaseProvider[T]):
-    def provide(self) -> Awaitable[T]:
+class AsyncFactoryWrapper(BaseFactoryWrapper[T]):
+    def provide(self, *args: Any, **kwargs: Any) -> Awaitable[T]:
         pass
 
     def finalize(self) -> Awaitable[None]:
         pass
 
 
-class AsyncContextManagerProvider(AsyncProvider[T]):
+class AsyncContextManagerFactoryWrapper(AsyncFactoryWrapper[T]):
     pass

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+from collections import defaultdict
 from typing import (
     TypeVar,
     Union,
@@ -12,10 +14,19 @@ from typing import (
     Optional,
     Dict,
     cast,
+    Any,
+    Iterable,
+    List,
+    DefaultDict,
 )
 
 from dependency_injection.errors import DependencyLookupError
 from dependency_injection.models import Scope, Dependency, AnyFactory
+from dependency_injection.provider import (
+    BaseFactoryWrapper,
+    FactoryWrapper,
+    AsyncFactoryWrapper,
+)
 from dependency_injection.type_checking import (
     is_required_supertype_of_provided,
 )
@@ -27,34 +38,14 @@ C = TypeVar('C', bound='Container')
 ROOT_SCOPE = Scope('init')
 
 
+class InstantiatedValuesManager:
+    pass
+
+
 class Container:
-    @property
-    def current_scope(self) -> Scope:
-        return self._current_scope
+    current_scope: Scope
 
-    def __init__(
-        self,
-        resolves: Mapping[str, Dependency],
-        scope: Scope = ROOT_SCOPE,
-        inherits_container: Optional[Container] = None,
-    ):
-        self._resolves = resolves
-        if inherits_container:
-            if (
-                scope != inherits_container.current_scope
-                and not scope.is_child_of(inherits_container.current_scope)
-            ):
-                raise ValueError(
-                    'New scope must be either same or direct '
-                    'children of inherited container'
-                )
-
-        self._current_scope = scope
-        self._parent_container = inherits_container
-
-    def resolve(
-        self, dep_name: str, required_type: Type[T]
-    ) -> Union[T, Awaitable[T]]:
+    def resolve(self, dep_name: str, required_type: Type[T]) -> T:
         """
         :param dep_name:
         :param required_type: должен быть супертипом для производимого типа,
@@ -62,29 +53,23 @@ class Container:
             более специфичным чем тип производимой зависимости
         :return:
         """
-        dependency = _lookup_dependency(
-            self._all_resolvers(), dep_name, required_type
-        )
+        raise NotImplementedError
 
-    def finalize(self) -> Union[None, Awaitable[None]]:
-        pass
-
-    def _all_resolvers(self) -> Dict[str, Dependency]:
-        parent_resolvers = {}
-        if self._parent_container:
-            parent_resolvers = self._parent_container._all_resolvers()
-        return parent_resolvers | self._resolves
+    def finalize(self) -> None:
+        raise NotImplementedError
 
 
 class MutableContainer(Container):
     def __init__(
         self,
-        resolves: Optional[Mapping[str, Dependency]] = None,
-        scope: Optional[Scope] = None,
-        inherits_container: Optional[MutableContainer] = None,
+        parent_ctr: Container,
+        current_scope: Scope = ROOT_SCOPE,
     ):
-        super().__init__(resolves or {}, scope, inherits_container)
-        self._resolves_mut: Dict[str, Dependency] = {}
+        self._parent = parent_ctr
+        self._provides_mut: DefaultDict[
+            Scope, Dict[str, Dependency]
+        ] = defaultdict(dict)
+        self.current_scope = current_scope
 
     def provides(
         self,
@@ -93,7 +78,9 @@ class MutableContainer(Container):
         factory: Optional[AnyFactory] = None,
         **requires: Tuple[str, Type],
     ) -> None:
-        pass
+        self._provides_mut[self.current_scope][dep_name] = Dependency(
+            dep_name, provides_cls, requires, factory
+        )
 
     def provides_at_scope(
         self,
@@ -104,9 +91,6 @@ class MutableContainer(Container):
         **requires: Tuple[str, Type],
     ) -> None:
         pass
-
-    def _all_resolvers(self) -> Dict[str, Dependency]:
-        return super()._all_resolvers() | self._resolves_mut
 
 
 def container_scope(container: C, scope: Scope) -> ContextManager[C]:

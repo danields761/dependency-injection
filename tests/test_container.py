@@ -3,10 +3,13 @@ from unittest.mock import Mock
 
 from pytest import raises, fixture, mark
 
-from dependency_injection.container import MutableContainer, container_scope, \
-    ROOT_SCOPE
+from dependency_injection.container import (
+    MutableContainer,
+    container_scope,
+    ROOT_SCOPE,
+)
 from dependency_injection.models import Scope
-from dependency_injection.provider import Provider
+from dependency_injection.provider import FactoryWrapper
 
 
 class Foo:
@@ -53,7 +56,7 @@ def test_container_cant_provide_values_in_root_scope(root_ctr):
     root_ctr.provides('foo', Foo)
 
     with raises(RuntimeError) as exc_info:
-        root_ctr.lookup_resolver('foo', Foo)
+        root_ctr.resolve('foo', Foo)
     assert str(exc_info.value) == 'Could not provide while in root scope'
 
 
@@ -61,28 +64,6 @@ def test_container_cant_enter_indirect_scope(root_ctr):
     with raises(RuntimeError) as exc_info:
         container_scope(root_ctr, OP_SCOPE).__enter__()
     assert str(exc_info.value) == 'Could not enter indirect scope'
-
-
-def test_container_provides_simple_value(root_ctr):
-    root_ctr.provides('value', int, lambda: 100)
-    with container_scope(root_ctr, APP_SCOPE) as app_ctr:
-        assert app_ctr.resolve('value', int) == 100
-
-
-def test_container_cant_register_provider_for_ambiguous_types(root_ctr):
-    with raises(RuntimeError) as exc_info:
-        root_ctr.provides('value', lambda: 100)
-    assert (
-        str(exc_info.value) == 'Could not register provider for ambiguous type'
-    )
-
-
-def test_container_provides_class_instance_registered_without_factory(
-    root_ctr, app_ctr
-):
-    root_ctr.provides('foo', Foo)
-    foo = app_ctr.resolve('foo', Foo)
-    assert isinstance(foo, Foo)
 
 
 @mark.parametrize(
@@ -135,52 +116,6 @@ def test_cant_specialize_type_on_provide(
     )
 
 
-def test_provides_at_scope(root_ctr, app_ctr):
-    root_ctr.provides('foo', Foo)
-    root_ctr.provides_at_scope(OP_SCOPE, 'bar', Bar, foo=('foo', Foo))
-
-    with raises(LookupError) as exc_info:
-        app_ctr.lookup_resolver('bar', Bar)
-    assert str(exc_info.value) == (
-        'Could not find provider for "bar" of type "Bar", '
-        'but it was declared for future scope "OP_SCOPE"'
-    )
-
-    with container_scope(app_ctr, OP_SCOPE) as op_ctr:
-        bar = op_ctr.resolve('bar', Bar)
-        assert isinstance(bar, Bar)
-        assert bar.foo is op_ctr.resolve('foo', Foo)
-
-
-def test_provides_at_scope_cant_provide_for_outer_scope(app_ctr):
-    with container_scope(app_ctr, OP_SCOPE) as op_ctr:
-        with raises(RuntimeError) as exc_info:
-            op_ctr.provides_at_scope(APP_SCOPE, 'test', Foo)
-        assert str(exc_info.value) == 'Could not provide for outer scope'
-
-
-def test_provides_at_scope_forbids_resolving_outside(app_ctr, op_ctr):
-    pass
-
-
-def test_inherits_values_from_outer_scope(root_ctr):
-    foo_mock = Mock(name='foo')
-    root_ctr.provides('foo', Foo, lambda: foo_mock)
-    with container_scope(root_ctr, APP_SCOPE) as app_ctr:
-        with container_scope(app_ctr, OP_SCOPE) as op_ctr:
-            assert op_ctr.resolve('foo', Foo) is foo_mock
-        assert app_ctr.resolve('foo', Foo) is foo_mock
-
-
-def test_overrides_outer_scope_values(root_ctr, app_ctr, op_ctr):
-    root_ctr.provides('value', str, lambda: 'root-scope-value')
-    app_ctr.provides('value', str, lambda: 'app-scope-value')
-    op_ctr.provides('value', str, lambda: 'op-scope-value')
-    assert root_ctr.resolve('value', str) == 'root-scope-value'
-    assert app_ctr.resolve('value', str) == 'app-scope-value'
-    assert op_ctr.resolve('value', str) == 'op-scope-value'
-
-
 def test_scope_containers_independent_but_inherits_common_container(root_ctr):
     root_ctr.provides('value', str, lambda: 'root-scope-value')
     with container_scope(root_ctr, APP_SCOPE) as app_ctr1, container_scope(
@@ -201,6 +136,96 @@ def test_scope_containers_independent_but_inherits_common_container(root_ctr):
         assert app_ctr2.resolve('value', str) == 'app-scope-2-value'
 
 
+class TestProvidersRegistration:
+    def test_container_provides_simple_value(self, root_ctr):
+        root_ctr.provides('value', int, lambda: 100)
+        with container_scope(root_ctr, APP_SCOPE) as app_ctr:
+            assert app_ctr.resolve('value', int) == 100
+
+    def test_container_cant_register_provider_for_ambiguous_types(
+        self, root_ctr
+    ):
+        with raises(RuntimeError) as exc_info:
+            root_ctr.provides('value', lambda: 100)
+        assert (
+            str(exc_info.value)
+            == 'Could not register provider for ambiguous type'
+        )
+
+    def test_container_provides_class_instance_registered_without_factory(
+        self, root_ctr, app_ctr
+    ):
+        root_ctr.provides('foo', Foo)
+        foo = app_ctr.resolve('foo', Foo)
+        assert isinstance(foo, Foo)
+
+    def test_provides_at_scope(self, root_ctr, app_ctr):
+        root_ctr.provides('foo', Foo)
+        root_ctr.provides_at_scope(OP_SCOPE, 'bar', Bar, foo=('foo', Foo))
+
+        with raises(LookupError) as exc_info:
+            app_ctr.resolve('bar', Bar)
+        assert str(exc_info.value) == (
+            'Could not find provider for "bar" of type "Bar", '
+            'but it was declared for future scope "OP_SCOPE"'
+        )
+
+        with container_scope(app_ctr, OP_SCOPE) as op_ctr:
+            bar = op_ctr.resolve('bar', Bar)
+            assert isinstance(bar, Bar)
+            assert bar.foo is op_ctr.resolve('foo', Foo)
+
+    def test_provides_at_scope_cant_provide_for_outer_scope(self, app_ctr):
+        with container_scope(app_ctr, OP_SCOPE) as op_ctr:
+            with raises(RuntimeError) as exc_info:
+                op_ctr.provides_at_scope(APP_SCOPE, 'test', Foo)
+            assert str(exc_info.value) == 'Could not provide for outer scope'
+
+
+class TestScopeResolveRules:
+    def test_inherits_values_from_outer_scope(self, root_ctr):
+        foo_mock = Mock(name='foo')
+        root_ctr.provides('foo', Foo, lambda: foo_mock)
+        with container_scope(root_ctr, APP_SCOPE) as app_ctr:
+            with container_scope(app_ctr, OP_SCOPE) as op_ctr:
+                assert op_ctr.resolve('foo', Foo) is foo_mock
+            assert app_ctr.resolve('foo', Foo) is foo_mock
+
+    def test_overrides_outer_scope_values(self, root_ctr, app_ctr, op_ctr):
+        root_ctr.provides('value', str, lambda: 'root-scope-value')
+        app_ctr.provides('value', str, lambda: 'app-scope-value')
+        op_ctr.provides('value', str, lambda: 'op-scope-value')
+        assert root_ctr.resolve('value', str) == 'root-scope-value'
+        assert app_ctr.resolve('value', str) == 'app-scope-value'
+        assert op_ctr.resolve('value', str) == 'op-scope-value'
+
+    def test_container_provides_distinct_values_for_same_scope_with_different_ctr_instances(
+        self, root_ctr
+    ):
+        root_ctr.provides_at_scope(
+            APP_SCOPE, 'app-value', str, lambda: Mock(name='app-value')
+        )
+        root_ctr.provides_at_scope(
+            OP_SCOPE, 'op-value', str, lambda: Mock(name='op-value')
+        )
+
+        with container_scope(root_ctr, APP_SCOPE) as app_ctr:
+            app_value = app_ctr.resolve('app-value', str)
+            with container_scope(
+                app_ctr, OP_SCOPE
+            ) as op_ctr_1, container_scope(app_ctr, OP_SCOPE) as op_ctr_2:
+                assert op_ctr_1.resolve('app-value', str) is op_ctr_2.resolve(
+                    'app-value', str
+                )
+                assert op_ctr_1.resolve('app-value', str) is app_value
+                assert op_ctr_1.resolve(
+                    'op-value', str
+                ) is not op_ctr_2.resolve('op-value', str)
+        with container_scope(root_ctr, APP_SCOPE) as app_ctr:
+            new_app_value = app_ctr.resolve('app-value', str)
+            assert new_app_value is not app_value
+
+
 def test_container():
     root_ctr = MutableContainer()
     root_ctr.provides('foo', Foo)
@@ -208,13 +233,13 @@ def test_container():
     root_ctr.provides('param', lambda: 100)
 
     with container_scope(root_ctr, APP_SCOPE) as app_ctr:
-        foo_provider = app_ctr.lookup_resolver('foo', Foo)
-        assert isinstance(foo_provider, Provider)
+        foo_provider = app_ctr.resolve('foo', Foo)
+        assert isinstance(foo_provider, FactoryWrapper)
         foo = foo_provider.provide()
         assert isinstance(foo, Foo)
 
-        bar_provider = app_ctr.lookup_resolver('bar', Bar)
-        assert isinstance(bar_provider, Provider)
+        bar_provider = app_ctr.resolve('bar', Bar)
+        assert isinstance(bar_provider, FactoryWrapper)
         bar = bar_provider.provide()
         assert isinstance(bar, Bar) and not isinstance(bar, BarImpl)
         assert bar.foo is foo
@@ -224,8 +249,8 @@ def test_container():
                 'bar', Bar, BarImpl, foo=('foo', Foo), param=('param', int)
             )
 
-            bar_provider2 = op_ctr.lookup_resolver('bar', Bar)
-            assert isinstance(bar_provider2, Provider)
+            bar_provider2 = op_ctr.resolve('bar', Bar)
+            assert isinstance(bar_provider2, FactoryWrapper)
             bar2 = bar_provider2.provide()
             assert isinstance(bar2, BarImpl)
             assert bar2.foo is foo
