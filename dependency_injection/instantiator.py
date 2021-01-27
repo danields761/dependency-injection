@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from types import TracebackType
 from typing import (
     TypeVar,
     Callable,
@@ -14,6 +15,7 @@ from typing import (
     Optional,
     Tuple,
     Generic,
+    Type,
 )
 
 from dependency_injection.models import AnySyncFactory, AnyFactory
@@ -23,16 +25,13 @@ S = TypeVar('S')
 VW = TypeVar('VW')
 AF = TypeVar('AF', bound=Callable)
 
-#: `Eager` is opposite to `Awaitable`
+#: `Eager` is opposite to `Awaitable`, uses the rule `Union[T]` <-> `T`
 Eager = Union[T]
 
-
-def _cm_exit_without_args(exit_method: Callable) -> Callable[[], None]:
-    signature = inspect.signature(exit_method)
-    if len(signature.parameters) > 1:
-        return lambda: exit_method(None, None, None)
-    else:
-        return exit_method
+FinalizerCallable = Callable[
+    [Optional[Type[Exception]], Optional[Exception], Optional[TracebackType]],
+    VW[bool],
+]
 
 
 class Instantiator(Generic[T, VW, AF]):
@@ -42,7 +41,7 @@ class Instantiator(Generic[T, VW, AF]):
         self._factory = factory
         self._kwargs = kwargs
         self._value: Optional[T] = None
-        self._finalizer: Optional[Callable[[], VW[None]]] = None
+        self._finalizer: Optional[FinalizerCallable[VW]] = None
 
     @property
     def value(self) -> VW[T]:
@@ -51,11 +50,16 @@ class Instantiator(Generic[T, VW, AF]):
         else:
             return self._create_and_set_value()
 
-    def finalize(self) -> VW[None]:
+    def finalize(
+        self,
+        exc_type: Optional[Type[Exception]],
+        exc: Optional[Exception],
+        tb: Optional[TracebackType],
+    ) -> VW[bool]:
         if self._finalizer:
-            return self._finalizer()
+            return self._finalizer(exc_type, exc, tb)
         else:
-            return self._wrap_value(None)
+            return self._wrap_value(False)
 
     def _create_and_set_value(self) -> VW[T]:
         raise NotImplementedError
@@ -72,7 +76,7 @@ class SyncInstantiator(Instantiator[T, Eager, AnySyncFactory]):
         pre_value = self._factory(**self._kwargs)
         if isinstance(pre_value, ContextManager):
             self._value = pre_value.__enter__()
-            self._finalizer = _cm_exit_without_args(pre_value.__exit__)
+            self._finalizer = pre_value.__exit__
         else:
             self._value = pre_value
 
@@ -103,7 +107,7 @@ class AsyncInstantiator(Instantiator[T, Awaitable, AnyFactory]):
 
             if isinstance(value_pass_2, AsyncContextManager):
                 value_pass_3 = await value_pass_2.__aenter__()
-                self._finalizer = _cm_exit_without_args(value_pass_2.__aexit__)
+                self._finalizer = value_pass_2.__aexit__
             else:
                 value_pass_3 = value_pass_2
 

@@ -267,6 +267,10 @@ class MutableContainer(Container[SC, AF]):
         return self._scope_factory
 
 
+SyncMutableContainer = MutableContainer[SC, Eager, AnySyncFactory]
+AsyncMutableContainer = MutableContainer[SC, Awaitable, AnyFactory]
+
+
 @overload
 def provider_scope(ctr: SyncContainer) -> ContextManager[SyncProvider[SC]]:
     ...
