@@ -14,7 +14,6 @@ from typing import (
     Awaitable,
     Callable,
     ContextManager,
-    Generator,
     Generic,
     Iterator,
     Mapping,
@@ -29,25 +28,29 @@ from dependency_injection.types_match import (
     TypesMatcher,
     is_type_acceptable_in_place_of,
 )
+from dependency_injection.utils import EagerValueAwaitable
 
-T = TypeVar('T')
-#: `Eager` is antonym to `Awaitable`
-Eager = Union
-#: AF - is shortcut for "Allowed Factories", one of
-#: `AnySyncFactory` or `AnyFactory`
-AF = TypeVar('AF', bound=Callable)
-#: VW - is shortcut for "Value Wrapper", one of `Eager` or `Awaitable`
-VW = TypeVar('VW')
+T = TypeVar('T', covariant=True)
 
 AnySyncFactory = Union[
     Callable[..., T],
     Callable[..., ContextManager[T]],
 ]
 AnyFactory = Union[
-    AnySyncFactory,
+    AnySyncFactory[T],
     Callable[..., Awaitable[T]],
     Callable[..., AsyncContextManager[T]],
 ]
+
+#: `Eager` is antonym to `Awaitable`
+Eager = Union[T]
+#: AF - is shortcut for "Allowed Factories", one of
+#: `AnySyncFactory` or `AnyFactory`
+AF = TypeVar('AF', bound=Callable)
+#: VW - is shortcut for "Value Wrapper", one of `Eager` or `Awaitable`
+VW = TypeVar('VW')
+#: GT - is shortcut for "Guard Type"
+GT = TypeVar('GT', ContextManager, AsyncContextManager)
 
 
 @dataclass(frozen=True, unsafe_hash=True)
@@ -86,11 +89,23 @@ SyncImmutableContainer = BaseImmutableContainer[SyncDependency]
 ImmutableContainer = BaseImmutableContainer[Dependency]
 
 
-class BaseResolver(Generic[VW, DT]):
+class _HasEnterContextManagerMethod(Protocol):
+    def enter_context(self, cm: ContextManager[T]) -> T:
+        raise NotImplementedError
+
+
+class _HasEnterAsyncContextManager(_HasEnterContextManagerMethod, Protocol):
+    def enter_async_context(self, cm: AsyncContextManager[T]) -> Awaitable[T]:
+        raise NotImplementedError
+
+
+class BaseResolver(Generic[VW, DT, GT]):
+    guard: GT
+    finalizers_stack: _HasEnterContextManagerMethod
+
     def __init__(self, container: BaseContainer[DT]):
         self._container = container
-        self._resolved: dict[str, Any] = {}
-        self._finalizers_stack = ExitStack()
+        self._resolved: dict[str, VW] = {}
 
     def resolve(self, look_name: str, look_type: Type[T]) -> VW[T]:
         dep = self._lookup_dep(look_name, look_type)
@@ -132,32 +147,10 @@ class BaseResolver(Generic[VW, DT]):
         raise NotImplementedError
 
 
-class EagerValueAwaitable(Awaitable[T]):
-    """
-    Always return value without suspending coroutine on
-    `await EagerValueAwaitable(...)`.
-
-    It is possible to achieve same functionality via `asyncio.Future` with
-    instant `f.set_result(...)`, but this locks us on `asyncio` without
-    actual reason.
-    """
-
-    def __init__(self, value: T):
-        self._value = value
-
-    def __await__(self) -> Generator[Any, None, T]:
-        """
-        Generator which instantly returns provided value without suspending
-        anything.
-        """
-        # Makes this function generator, but never yields
-        if False:
-            yield 1
-        return self._value
-
-
 def _create_sync_dependency(
-    resolver: BaseResolver[Any, Any], dep: SyncDependency[T], **dep_args: Any
+    resolver: BaseResolver[Any, Any, Any],
+    dep: SyncDependency[T],
+    **dep_args: Any,
 ) -> T:
     value: Union[T, ContextManager[T]] = dep.factory(**dep_args)
     if not dep.context_manager:
@@ -168,27 +161,26 @@ def _create_sync_dependency(
             f'Dependency {dep.name} expected to be context manager, '
             f'but factory returned {value}'
         )
-    return resolver._finalizers_stack.enter_context(value)
+    return resolver.finalizers_stack.enter_context(value)
 
 
-class SyncResolver(
-    BaseResolver[
-        # Ugly because `typing` module prohibits subscribing generics with
-        # bare `Union`
-        Eager[Any],
-        SyncDependency,
-    ]
-):
+class SyncResolver(BaseResolver[Eager, SyncDependency, ContextManager[None]]):
+    def __init__(self, container: SyncContainer):
+        super().__init__(container)
+        self.guard = self.finalizers_stack = ExitStack()
+
     def _create(self, dep: SyncDependency[T], **dep_args: Any) -> Eager[T]:
         created = _create_sync_dependency(self, dep, **dep_args)
         self._resolved[dep.name] = created
         return created
 
 
-class Resolver(BaseResolver[Awaitable, Dependency]):
+class Resolver(BaseResolver[Awaitable, Dependency, AsyncContextManager[None]]):
+    finalizers_stack: _HasEnterAsyncContextManager
+
     def __init__(self, container: Container):
         super().__init__(container)
-        self._async_finalizers_stack = AsyncExitStack()
+        self.guard = self.finalizers_stack = AsyncExitStack()
 
     def _create(
         self, dep: Dependency[T], **dep_args: Awaitable
@@ -218,10 +210,8 @@ class Resolver(BaseResolver[Awaitable, Dependency]):
                         '`async_` and `context_manager` have to return '
                         '`AsyncContextManager` from it factory'
                     )
-                ready_value = (
-                    await self._async_finalizers_stack.enter_async_context(
-                        value
-                    )
+                ready_value = await self.finalizers_stack.enter_async_context(
+                    value
                 )
             else:
                 ready_value = await value
@@ -235,14 +225,12 @@ class Resolver(BaseResolver[Awaitable, Dependency]):
 @contextmanager
 def sync_resolver_scope(container: SyncContainer) -> Iterator[SyncResolver]:
     resolver = SyncResolver(container)
-    with resolver._finalizers_stack:
+    with resolver.guard:
         yield resolver
 
 
 @asynccontextmanager
 async def resolver_scope(container: Container) -> AsyncIterator[Resolver]:
     resolver = Resolver(container)
-    # first enter/last exit sync dependencies
-    with resolver._finalizers_stack:
-        async with resolver._async_finalizers_stack:
-            yield resolver
+    async with resolver.guard:
+        yield resolver

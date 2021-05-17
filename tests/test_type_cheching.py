@@ -89,7 +89,7 @@ def test_is_abc(maybe_abc, excepted_result):
         ]
     ],
 )
-@mark.xfail(todo=True)
+@mark.xfail
 def test_is_user_st_protocol(maybe_proto, excepted_result):
     assert is_user_st_protocol(maybe_proto) is excepted_result
 

@@ -4,7 +4,6 @@ from typing import (
     Awaitable,
     Callable,
     ContextManager,
-    Generic,
     Literal,
     Mapping,
     Protocol,
@@ -16,14 +15,14 @@ from typing import (
 
 from dependency_injection.types_match import TypesMatcher
 
-T = TypeVar('T')
+T = TypeVar('T', covariant=True)
 
 AnySyncFactory = Union[
     Callable[..., T],
     Callable[..., ContextManager[T]],
 ]
 AnyFactory = Union[
-    AnySyncFactory,
+    AnySyncFactory[T],
     Callable[..., Awaitable[T]],
     Callable[..., AsyncContextManager[T]],
     Callable[..., Awaitable[AsyncContextManager[T]]],

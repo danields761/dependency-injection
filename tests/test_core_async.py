@@ -6,10 +6,10 @@ from pytest import mark
 
 from dependency_injection.core import (
     Dependency,
-    EagerValueAwaitable,
     ImmutableContainer,
     resolver_scope,
 )
+from dependency_injection.utils import EagerValueAwaitable
 from tests.helpers import A_INST, A, DepOnA
 
 pytestmark = mark.usefixtures('loop')
