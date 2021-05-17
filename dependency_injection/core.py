@@ -170,7 +170,7 @@ class BaseResolver(Generic[VW, DT, GT]):
                 raise
             dep_lookup_exc = exc
 
-        if self._unknown_resolver:
+        if self._unknown_resolver and dep_lookup_exc:
             # "Unknown resolver" might help handle unknown dependency
             try:
                 return self._unknown_resolver(look_name, look_type)
@@ -306,8 +306,12 @@ def _create_dependency_as_sync(
 
 
 class Resolver(BaseResolver[Eager[HKV], Dependency[Any], ContextManager[HKV]]):
-    def __init__(self, container: Container):
-        super().__init__(container)
+    def __init__(
+        self,
+        container: Container,
+        unknown_resolver: Optional[Callable[[str, Type[T]], VW[T]]] = None,
+    ):
+        super().__init__(container, unknown_resolver)
         self.guard = self.finalizers_stack = ExitStack()
 
     def _create(self, dep: Dependency[T], **dep_args: Any) -> Eager[T]:
@@ -323,8 +327,12 @@ class AsyncResolver(
 ):
     finalizers_stack: _HasEnterAsyncContextManager
 
-    def __init__(self, container: AsyncContainer):
-        super().__init__(container)
+    def __init__(
+        self,
+        container: AsyncContainer,
+        unknown_resolver: Optional[Callable[[str, Type[T]], VW[T]]] = None,
+    ):
+        super().__init__(container, unknown_resolver)
         self.guard = self.finalizers_stack = AsyncExitStack()
 
     def _create(
