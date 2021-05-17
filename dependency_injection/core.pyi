@@ -4,18 +4,23 @@ from typing import (
     Awaitable,
     Callable,
     ContextManager,
+    Generic,
+    Hashable,
     Literal,
     Mapping,
     Protocol,
+    Sequence,
     Tuple,
     Type,
     TypeVar,
     Union,
+    overload,
 )
 
 from dependency_injection.types_match import TypesMatcher
 
 T = TypeVar('T', covariant=True)
+ST = TypeVar('ST', bound=Hashable)
 
 AnySyncFactory = Union[
     Callable[..., T],
@@ -96,15 +101,47 @@ class AsyncImmutableContainer(AsyncContainer):
         types_matcher: TypesMatcher = ...,
     ): ...
 
+class ScopedContainers(Generic[ST]):
+    def __init__(
+        self, scopes_order: Sequence[ST], scopes: Mapping[ST, Container]
+    ): ...
+    def scopes_order(self) -> Sequence[ST]: ...
+    def scopes(self) -> Mapping[ST, Container]: ...
+
+class ScopedAsyncContainers(Generic[ST]):
+    def __init__(
+        self, scopes_order: Sequence[ST], scopes: Mapping[ST, AsyncContainer]
+    ): ...
+    def scopes_order(self) -> Sequence[ST]: ...
+    def scopes(self) -> Mapping[ST, AsyncContainer]: ...
+
 class Resolver(Protocol):
     def resolve(self, look_name: str, look_type: Type[T]) -> T: ...
 
 class AsyncResolver(Protocol):
     def resolve(self, look_name: str, look_type: Type[T]) -> Awaitable[T]: ...
 
-def resolver_scope(
+class ScopedResolver(Protocol[ST]):
+    def resolve(self, look_name: str, look_type: Type[T]) -> T: ...
+    def next_scope(self) -> ContextManager[ScopedResolver[ST]]: ...
+    @property
+    def scope(self) -> ST: ...
+
+class ScopedAsyncResolver(Protocol[ST]):
+    def resolve(self, look_name: str, look_type: Type[T]) -> Awaitable[T]: ...
+    def next_scope(self) -> AsyncContextManager[ScopedAsyncResolver]: ...
+    @property
+    def scope(self) -> ST: ...
+
+def create_resolver(
     container: Container,
 ) -> ContextManager[Resolver]: ...
-def async_resolver_scope(
+def create_scoped_resolver(
+    scoped_containers: ScopedContainers[ST],
+) -> ContextManager[ScopedResolver[ST]]: ...
+def create_async_resolver(
     container: AsyncContainer,
 ) -> AsyncContextManager[AsyncResolver]: ...
+def create_scoped_async_resolver(
+    scoped_containers: ScopedAsyncContainers[ST],
+) -> AsyncContextManager[ScopedAsyncResolver[ST]]: ...

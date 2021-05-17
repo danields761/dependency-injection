@@ -3,10 +3,10 @@ from typing import Any, Awaitable, Generator, TypeVar
 T = TypeVar('T')
 
 
-class EagerValueAwaitable(Awaitable[T]):
+class AwaitableValue(Awaitable[T]):
     """
     Always return value without suspending coroutine on
-    `await EagerValueAwaitable(...)`.
+    `await AwaitableValue(...)`.
 
     It is possible to achieve same functionality via `asyncio.Future` with
     instant `f.set_result(...)`, but this locks us on `asyncio` without

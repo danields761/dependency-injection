@@ -7,15 +7,15 @@ from pytest import mark
 from dependency_injection.core import (
     AsyncDependency,
     AsyncImmutableContainer,
-    async_resolver_scope,
+    create_async_resolver,
 )
-from dependency_injection.utils import EagerValueAwaitable
+from dependency_injection.utils import AwaitableValue
 from tests.helpers import A_INST, A, DepOnA
 
 # Make aliases to avoid verbosity
 Dependency = AsyncDependency
 ImmutableContainer = AsyncImmutableContainer
-resolver_scope = async_resolver_scope
+create_resolver = create_async_resolver
 
 
 pytestmark = mark.usefixtures('loop')
@@ -25,14 +25,15 @@ async def test_provides_sync_value():
     container = ImmutableContainer(
         {'a': Dependency('a', A, {}, lambda: A_INST)}
     )
-    async with resolver_scope(container) as resolver:
+    async with create_resolver(container) as resolver:
         assert await resolver.resolve('a', A) is A_INST
 
 
 async def test_memoizes_sync_value_and_still_returns_awaitable():
     a_factory = Mock(Callable, name='a-factory', return_value=A_INST)
     container = ImmutableContainer({'a': Dependency('a', A, {}, a_factory)})
-    async with resolver_scope(container) as resolver:
+
+    async with create_resolver(container) as resolver:
         v1 = await resolver.resolve('a', A)
         v2 = await resolver.resolve('a', A)
         assert v1 is A_INST
@@ -41,7 +42,7 @@ async def test_memoizes_sync_value_and_still_returns_awaitable():
 
         # Actually, this is pure internal detail, but why not test it here?
         v3_awaitable = resolver.resolve('a', A)
-        assert isinstance(v3_awaitable, EagerValueAwaitable)
+        assert isinstance(v3_awaitable, AwaitableValue)
         assert v3_awaitable._value is A_INST
 
 
@@ -52,7 +53,8 @@ async def test_provides_sync_cm_value():
     container = ImmutableContainer(
         {'a': Dependency('a', A, {}, a_cm_factory, context_manager=True)}
     )
-    async with resolver_scope(container) as resolver:
+
+    async with create_resolver(container) as resolver:
         a = await resolver.resolve('a', A)
         assert a is A_INST
         assert a_cm_factory.mock_calls == [call()]
@@ -70,7 +72,8 @@ async def test_provides_async_value():
     container = ImmutableContainer(
         {'a': Dependency('a', A, {}, a_factory, async_=True)}
     )
-    async with resolver_scope(container) as resolver:
+
+    async with create_resolver(container) as resolver:
         a = await resolver.resolve('a', A)
         assert a is A_INST
         assert a_factory.mock_calls == [call()]
@@ -82,7 +85,8 @@ async def test_memoizes_async_value_and_still_returns_awaitable():
     container = ImmutableContainer(
         {'a': Dependency('a', A, {}, a_factory, async_=True)}
     )
-    async with resolver_scope(container) as resolver:
+
+    async with create_resolver(container) as resolver:
         v1 = await resolver.resolve('a', A)
         v2 = await resolver.resolve('a', A)
         assert v1 is A_INST
@@ -101,7 +105,8 @@ async def test_provides_async_cm_value():
             )
         }
     )
-    async with resolver_scope(container) as resolver:
+
+    async with create_resolver(container) as resolver:
         a = await resolver.resolve('a', A)
         assert a is A_INST
         assert a_cm_factory.mock_calls == [call()]
@@ -132,7 +137,7 @@ async def test_async_factory_depends_on_sync():
         },
     )
 
-    async with resolver_scope(container) as resolver:
+    async with create_resolver(container) as resolver:
         dep_on_a = await resolver.resolve('dep_on_a', DepOnA)
         assert dep_on_a.a is A_INST
         assert a_factory.mock_calls == [call()]
@@ -155,7 +160,7 @@ async def test_sync_factory_depends_on_async():
         },
     )
 
-    async with resolver_scope(container) as resolver:
+    async with create_resolver(container) as resolver:
         dep_on_a = await resolver.resolve('dep_on_a', DepOnA)
         assert dep_on_a.a is A_INST
         assert a_factory.mock_calls == [call()]

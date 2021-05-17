@@ -7,7 +7,7 @@ from pytest import mark, param, raises
 from dependency_injection.core import (
     Dependency,
     ImmutableContainer,
-    resolver_scope,
+    create_resolver,
 )
 from tests.helpers import (
     A_INST,
@@ -52,7 +52,7 @@ def test_requesting_abstract_cls(provided_type, requested_type):
     container = ImmutableContainer(
         {'value': Dependency('value', provided_type, {}, value_factory)}
     )
-    with resolver_scope(container) as resolver:
+    with create_resolver(container) as resolver:
         value = resolver.resolve('value', requested_type)
         assert value is value_factory.return_value
         assert value_factory.mock_calls == [call()]
@@ -64,14 +64,14 @@ def test_provides_simple():
     container = ImmutableContainer(
         {'a': Dependency('a', A, requires={}, factory=a_factory)}
     )
-    with resolver_scope(container) as resolver:
+    with create_resolver(container) as resolver:
         assert resolver.resolve('a', A) is A_INST
     assert a_factory.mock_calls == [call()]
 
 
 def test_created_value_been_memoized_v1():
     container = ImmutableContainer({'a': Dependency('a', A, {}, factory=A)})
-    with resolver_scope(container) as resolver:
+    with create_resolver(container) as resolver:
         a1 = resolver.resolve('a', A)
         a2 = resolver.resolve('a', A)
         assert a1 is a2
@@ -82,7 +82,7 @@ def test_created_value_been_memoized_v2():
     container = ImmutableContainer(
         {'a': Dependency('a', A, {}, factory=a_factory)}
     )
-    with resolver_scope(container) as resolver:
+    with create_resolver(container) as resolver:
         a1 = resolver.resolve('a', A)
         a2 = resolver.resolve('a', A)
         assert a_factory.mock_calls == [call()]
@@ -92,9 +92,7 @@ def test_created_value_been_memoized_v2():
 def test_provides_with_deps():
     a_factory = Mock(Callable, name='a-factory', return_value=A_INST)
     b_factory = Mock(Callable, name='b-factory', return_value=B_INST)
-
     c_factory = Mock(Callable, name='c-factory', wraps=C)
-
     container = ImmutableContainer(
         {
             'a': Dependency('a', A, {}, factory=a_factory),
@@ -107,7 +105,8 @@ def test_provides_with_deps():
             ),
         }
     )
-    with resolver_scope(container) as resolver:
+
+    with create_resolver(container) as resolver:
         c_provided = resolver.resolve('c', C)
         assert isinstance(c_provided, C)
         assert c_provided.a is A_INST
@@ -122,7 +121,6 @@ def test_provides_dep_by_custom_arg_name():
         return C(a_arg, b_arg)
 
     c_factory_mock = Mock(Callable, wraps=c_factory, name='c-factory')
-
     container = ImmutableContainer(
         {
             'a': Dependency('a', A, {}, factory=lambda: A_INST),
@@ -135,7 +133,8 @@ def test_provides_dep_by_custom_arg_name():
             ),
         }
     )
-    with resolver_scope(container) as resolver:
+
+    with create_resolver(container) as resolver:
         c_inst = resolver.resolve('c', C)
         assert c_inst.a is A_INST
         assert c_inst.b is B_INST
@@ -146,11 +145,11 @@ def test_context_manager_factory():
     a_cm = MagicMock(AbstractContextManager, name='a-cm')
     a_cm.__enter__.return_value = A_INST
     a_cm_factory = Mock(Callable, name='a-factory', return_value=a_cm)
-
     container = ImmutableContainer(
         {'a': Dependency('a', A, {}, a_cm_factory, context_manager=True)}
     )
-    with resolver_scope(container) as resolver:
+
+    with create_resolver(container) as resolver:
         a = resolver.resolve('a', A)
         assert a is A_INST
         assert a_cm_factory.mock_calls == [call()]
@@ -184,7 +183,8 @@ def test_context_manager_as_sub_dep():
             ),
         }
     )
-    with resolver_scope(container) as resolver:
+
+    with create_resolver(container) as resolver:
         c = resolver.resolve('c', C)
         assert c.a is A_INST
         assert c.b is B_INST
@@ -200,6 +200,6 @@ def test_there_is_recursion_error_TODO():
         }
     )
 
-    with resolver_scope(container) as resolver:
+    with create_resolver(container) as resolver:
         with raises(RecursionError):
             resolver.resolve('a', A)
