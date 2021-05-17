@@ -1,69 +1,40 @@
 from contextlib import AbstractContextManager, contextmanager
-from typing import Callable, Sequence
+from typing import Callable
 from unittest.mock import MagicMock, Mock, call
 
-from pytest import mark, param, raises
+from pytest import raises
 
 from dependency_injection.core import (
     Dependency,
     ImmutableContainer,
     create_resolver,
 )
-from tests.helpers import (
-    A_INST,
-    B_INST,
-    A,
-    B,
-    C,
-    Foo,
-    FooABC,
-    FooInheritor,
-    FooProto,
-    NominalFooABC,
-)
+from tests.helpers import A_INST, B_INST, A, B, C
 
 
-@mark.parametrize(
-    'provided_type, requested_type',
-    [
-        (list, list[int]),
-        (list[int], Sequence),
-        (Foo, FooProto),
-        (FooABC, FooProto),
-        (FooInheritor, Foo),
-        (FooInheritor, FooProto),
-        (NominalFooABC, FooABC),
-        # Expected to fail because abc.ABC doesn't support
-        # structural typing, and we do so (maybe will be done in future)
-        param(
-            Foo,
-            FooABC,
-            marks=mark.xfail,
-        ),
-        param(
-            FooProto,
-            FooABC,
-            marks=mark.xfail,
-        ),
-    ],
-)
-def test_requesting_abstract_cls(provided_type, requested_type):
-    value_factory = Mock(name='value-factory')
+def test_calls_container_types_matcher():
+    factory = Mock(Callable, name='factory')
+    provided_type = Mock(type, name='provided-type')
+    required_type = Mock(type, name='required-type')
+    types_matcher = Mock(Callable, name='types-matcher')
     container = ImmutableContainer(
-        {'value': Dependency('value', provided_type, {}, value_factory)}
+        {'a': Dependency('a', provided_type, {}, factory)},
+        types_matcher,
     )
+
     with create_resolver(container) as resolver:
-        value = resolver.resolve('value', requested_type)
-        assert value is value_factory.return_value
-        assert value_factory.mock_calls == [call()]
+        value = resolver.resolve('a', required_type)
+
+    assert value is factory.return_value
+    assert types_matcher.mock_calls == [call(provided_type, required_type)]
 
 
 def test_provides_simple():
     a_factory = Mock(Callable, name='a-factory', return_value=A_INST)
-
     container = ImmutableContainer(
         {'a': Dependency('a', A, requires={}, factory=a_factory)}
     )
+
     with create_resolver(container) as resolver:
         assert resolver.resolve('a', A) is A_INST
     assert a_factory.mock_calls == [call()]

@@ -138,24 +138,22 @@ class TypesMatcher(Protocol):
 
 
 def is_type_acceptable_in_place_of(
-    target_acceptable: Type, in_place_of: Type
+    type_acceptable: Type, in_place_of: Type
 ) -> bool:
     # Vandally strip subscribed generics to their origins, anyway precise type
     # checking is not supported right now
-    target_acceptable = get_origin(target_acceptable) or target_acceptable
+    type_acceptable = get_origin(type_acceptable) or type_acceptable
     in_place_of = get_origin(in_place_of) or in_place_of
 
     # TODO raise if pair unmatchable
 
-    return issubclass(target_acceptable, in_place_of)
+    return issubclass(type_acceptable, in_place_of)
 
 
-def _ensure_types_checkable(
-    target_acceptable: Type, in_place_of: Type
-) -> None:
+def _ensure_types_checkable(type_acceptable: Type, in_place_of: Type) -> None:
     # If `t2` is not parent of `t1`, so in case when right side is not
     # runtime-checkable Protocol, throw according error
-    if in_place_of not in target_acceptable.__bases__:
+    if in_place_of not in type_acceptable.__bases__:
         if (
             not is_abc(in_place_of)
             and is_user_st_protocol(in_place_of)

@@ -13,9 +13,11 @@ from pytest import mark
 
 from dependency_injection.types_match import (
     is_abc,
+    is_type_acceptable_in_place_of,
     is_user_st_protocol,
     is_user_st_runtime_protocol,
 )
+from tests.helpers import Foo, FooABC, FooInheritor, FooProto, NominalFooABC
 
 T = TypeVar('T')
 
@@ -109,3 +111,34 @@ def test_is_user_st_protocol(maybe_proto, excepted_result):
 )
 def test_is_user_st_runtime_protocol(maybe_abc, excepted_result):
     assert is_user_st_runtime_protocol(maybe_abc) is excepted_result
+
+
+@mark.parametrize(
+    'type_acceptable, in_place_of, is_match',
+    [
+        (list, list[int], True),
+        (list[int], Sequence, True),
+        (Foo, FooProto, True),
+        (FooABC, FooProto, True),
+        (FooInheritor, Foo, True),
+        (FooInheritor, FooProto, True),
+        (NominalFooABC, FooABC, True),
+        # `abc.ABC` doesn't support structural typing, and we do so
+        # (maybe will be altered in future)
+        (
+            Foo,
+            FooABC,
+            False,
+        ),
+        (
+            FooProto,
+            FooABC,
+            False,
+        ),
+    ],
+)
+def test_types_consistency(type_acceptable, in_place_of, is_match):
+    assert (
+        is_type_acceptable_in_place_of(type_acceptable, in_place_of)
+        is is_match
+    )
