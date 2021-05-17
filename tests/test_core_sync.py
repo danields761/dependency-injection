@@ -5,9 +5,9 @@ from unittest.mock import MagicMock, Mock, call
 from pytest import mark, param, raises
 
 from dependency_injection.core import (
-    SyncDependency,
-    SyncImmutableContainer,
-    sync_resolver_scope,
+    Dependency,
+    ImmutableContainer,
+    resolver_scope,
 )
 from tests.helpers import (
     A_INST,
@@ -21,11 +21,6 @@ from tests.helpers import (
     FooProto,
     NominalFooABC,
 )
-
-# Make aliases to avoid verbosity
-Dependency = SyncDependency
-ImmutableContainer = SyncImmutableContainer
-resolver_scope = sync_resolver_scope
 
 
 @mark.parametrize(

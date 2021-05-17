@@ -36,7 +36,7 @@ AnySyncFactory = Union[
     Callable[..., T],
     Callable[..., ContextManager[T]],
 ]
-AnyFactory = Union[
+AnyAsyncFactory = Union[
     AnySyncFactory[T],
     Callable[..., Awaitable[T]],
     Callable[..., AsyncContextManager[T]],
@@ -63,8 +63,8 @@ class BaseDependency(Generic[T, AF]):
     async_: bool = False
 
 
-SyncDependency = BaseDependency[T, AnySyncFactory]
-Dependency = BaseDependency[T, AnyFactory]
+Dependency = BaseDependency[T, AnySyncFactory]
+AsyncDependency = BaseDependency[T, AnyAsyncFactory]
 
 
 DT = TypeVar('DT', bound=BaseDependency)
@@ -75,8 +75,8 @@ class BaseContainer(Protocol[DT]):
     types_matcher: TypesMatcher
 
 
-SyncContainer = BaseContainer[SyncDependency]
 Container = BaseContainer[Dependency]
+AsyncContainer = BaseContainer[AsyncDependency]
 
 
 @dataclass(frozen=True)
@@ -85,8 +85,8 @@ class BaseImmutableContainer(Generic[DT]):
     types_matcher: TypesMatcher = is_type_acceptable_in_place_of
 
 
-SyncImmutableContainer = BaseImmutableContainer[SyncDependency]
 ImmutableContainer = BaseImmutableContainer[Dependency]
+AsyncImmutableContainer = BaseImmutableContainer[AsyncDependency]
 
 
 class _HasEnterContextManagerMethod(Protocol):
@@ -149,7 +149,7 @@ class BaseResolver(Generic[VW, DT, GT]):
 
 def _create_sync_dependency(
     resolver: BaseResolver[Any, Any, Any],
-    dep: SyncDependency[T],
+    dep: Dependency[T],
     **dep_args: Any,
 ) -> T:
     value: Union[T, ContextManager[T]] = dep.factory(**dep_args)
@@ -164,26 +164,28 @@ def _create_sync_dependency(
     return resolver.finalizers_stack.enter_context(value)
 
 
-class SyncResolver(BaseResolver[Eager, SyncDependency, ContextManager[None]]):
-    def __init__(self, container: SyncContainer):
+class Resolver(BaseResolver[Eager, Dependency, ContextManager[None]]):
+    def __init__(self, container: Container):
         super().__init__(container)
         self.guard = self.finalizers_stack = ExitStack()
 
-    def _create(self, dep: SyncDependency[T], **dep_args: Any) -> Eager[T]:
+    def _create(self, dep: Dependency[T], **dep_args: Any) -> Eager[T]:
         created = _create_sync_dependency(self, dep, **dep_args)
         self._resolved[dep.name] = created
         return created
 
 
-class Resolver(BaseResolver[Awaitable, Dependency, AsyncContextManager[None]]):
+class AsyncResolver(
+    BaseResolver[Awaitable, AsyncDependency, AsyncContextManager[None]]
+):
     finalizers_stack: _HasEnterAsyncContextManager
 
-    def __init__(self, container: Container):
+    def __init__(self, container: AsyncContainer):
         super().__init__(container)
         self.guard = self.finalizers_stack = AsyncExitStack()
 
     def _create(
-        self, dep: Dependency[T], **dep_args: Awaitable
+        self, dep: AsyncDependency[T], **dep_args: Awaitable
     ) -> Awaitable[T]:
         async def create_inner():
             ready_sub_deps = {
@@ -223,14 +225,16 @@ class Resolver(BaseResolver[Awaitable, Dependency, AsyncContextManager[None]]):
 
 
 @contextmanager
-def sync_resolver_scope(container: SyncContainer) -> Iterator[SyncResolver]:
-    resolver = SyncResolver(container)
+def resolver_scope(container: Container) -> Iterator[Resolver]:
+    resolver = Resolver(container)
     with resolver.guard:
         yield resolver
 
 
 @asynccontextmanager
-async def resolver_scope(container: Container) -> AsyncIterator[Resolver]:
-    resolver = Resolver(container)
+async def async_resolver_scope(
+    container: AsyncContainer,
+) -> AsyncIterator[AsyncResolver]:
+    resolver = AsyncResolver(container)
     async with resolver.guard:
         yield resolver

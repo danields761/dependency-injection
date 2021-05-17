@@ -5,12 +5,18 @@ from unittest.mock import AsyncMock, MagicMock, Mock, call
 from pytest import mark
 
 from dependency_injection.core import (
-    Dependency,
-    ImmutableContainer,
-    resolver_scope,
+    AsyncDependency,
+    AsyncImmutableContainer,
+    async_resolver_scope,
 )
 from dependency_injection.utils import EagerValueAwaitable
 from tests.helpers import A_INST, A, DepOnA
+
+# Make aliases to avoid verbosity
+Dependency = AsyncDependency
+ImmutableContainer = AsyncImmutableContainer
+resolver_scope = async_resolver_scope
+
 
 pytestmark = mark.usefixtures('loop')
 

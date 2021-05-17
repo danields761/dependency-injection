@@ -21,14 +21,14 @@ AnySyncFactory = Union[
     Callable[..., T],
     Callable[..., ContextManager[T]],
 ]
-AnyFactory = Union[
+AnyAsyncFactory = Union[
     AnySyncFactory[T],
     Callable[..., Awaitable[T]],
     Callable[..., AsyncContextManager[T]],
     Callable[..., Awaitable[AsyncContextManager[T]]],
 ]
 
-class SyncDependency(Protocol[T]):
+class Dependency(Protocol[T]):
     def __init__(
         self,
         name: str,
@@ -51,13 +51,13 @@ class SyncDependency(Protocol[T]):
     @property
     def async_(self) -> Literal[False]: ...
 
-class Dependency(Protocol[T]):
+class AsyncDependency(Protocol[T]):
     def __init__(
         self,
         name: str,
         provides_type: Type[T],
         requires: Mapping[str, Tuple[str, Type]],
-        factory: AnyFactory[T],
+        factory: AnyAsyncFactory[T],
         context_manager: bool = False,
         async_: bool = False,
     ): ...
@@ -68,26 +68,19 @@ class Dependency(Protocol[T]):
     @property
     def requires(self) -> Mapping[str, Tuple[str, Type]]: ...
     @property
-    def factory(self) -> AnyFactory[T]: ...
+    def factory(self) -> AnyAsyncFactory[T]: ...
     @property
     def context_manager(self) -> bool: ...
     @property
     def async_(self) -> bool: ...
 
-class SyncContainer(Protocol):
-    provides: Mapping[str, SyncDependency[Any]]
-    types_matcher: TypesMatcher
-
 class Container(Protocol):
     provides: Mapping[str, Dependency[Any]]
     types_matcher: TypesMatcher
 
-class SyncImmutableContainer(SyncContainer):
-    def __init__(
-        self,
-        provides: Mapping[str, SyncDependency[Any]],
-        types_matcher: TypesMatcher = ...,
-    ): ...
+class AsyncContainer(Protocol):
+    provides: Mapping[str, AsyncDependency[Any]]
+    types_matcher: TypesMatcher
 
 class ImmutableContainer(Container):
     def __init__(
@@ -96,13 +89,22 @@ class ImmutableContainer(Container):
         types_matcher: TypesMatcher = ...,
     ): ...
 
-class SyncResolver(Protocol):
-    def resolve(self, look_name: str, look_type: Type[T]) -> T: ...
+class AsyncImmutableContainer(AsyncContainer):
+    def __init__(
+        self,
+        provides: Mapping[str, AsyncDependency[Any]],
+        types_matcher: TypesMatcher = ...,
+    ): ...
 
 class Resolver(Protocol):
+    def resolve(self, look_name: str, look_type: Type[T]) -> T: ...
+
+class AsyncResolver(Protocol):
     def resolve(self, look_name: str, look_type: Type[T]) -> Awaitable[T]: ...
 
-def sync_resolver_scope(
-    container: SyncContainer,
-) -> ContextManager[SyncResolver]: ...
-def resolver_scope(container: Container) -> AsyncContextManager[Resolver]: ...
+def resolver_scope(
+    container: Container,
+) -> ContextManager[Resolver]: ...
+def async_resolver_scope(
+    container: AsyncContainer,
+) -> AsyncContextManager[AsyncResolver]: ...
