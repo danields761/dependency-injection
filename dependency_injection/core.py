@@ -56,11 +56,9 @@ AnyAsyncFactory = Union[
 Eager = Union
 
 # Exists, because this part of code abuses not even well-discussed
-# "Higher-Kinded Generics", and `typing.Generic` codebase not aware of such
-# concept (it is even prohibited by various internal checks). Threat this
-# variable as symbol which defines a slot on HK type variable, on which
-# place something (either other type variable or concrete type) might be
-# plugged in.
+# "Higher-Kinded Generics". Of course, `typing.Generic` codebase not
+# aware of such concept. This is used to denote, that given generic argument
+# can be further subscribed (ex. `Awaitable[HKA]`).
 HKV = Any
 
 #: Abbreviation for "Allowed Factories",
@@ -227,12 +225,7 @@ class BaseScopedResolver(
     ):
         if parent is None:
             first_scope = scoped_containers.scopes_order[0]
-            if scope is not None and scope != first_scope:
-                raise ValueError(
-                    'No parent resolver were given, but specified '
-                    'scope is not first for scoped containers'
-                )
-            scope = first_scope
+            new_scope = first_scope
             unknown_resolver = None
         else:
             try:
@@ -248,8 +241,16 @@ class BaseScopedResolver(
                 raise ValueError(
                     'No next scope available for given scoped containers'
                 )
-            scope = scoped_containers.scopes_order[scope_idx]
+            new_scope = scoped_containers.scopes_order[scope_idx]
             unknown_resolver = parent.resolve
+
+        if scope is not None:
+            if new_scope != scope:
+                raise ValueError(
+                    f'Could not enter given scope "{scope}", '
+                    f'only "{new_scope}" is possible'
+                )
+        scope = new_scope
 
         container = scoped_containers.scopes[scope]
         # Owned resolver is required to avid mixin-usages
@@ -272,7 +273,9 @@ class BaseScopedResolver(
     def resolve(self, look_name: str, look_type: Type[T]) -> VW[T]:
         return self._owned_resolver.resolve(look_name, look_type)
 
-    def next_scope(self) -> GT[BaseScopedResolver[VW, DT, GT, ST]]:
+    def next_scope(
+        self, scope: Optional[ST] = None
+    ) -> GT[BaseScopedResolver[VW, DT, GT, ST]]:
         raise NotImplementedError
 
 
@@ -394,10 +397,17 @@ class ScopedResolver(
 ):
     _owned_resolver_cls = Resolver
 
-    def next_scope(self) -> ContextManager[ScopedResolver[ST]]:
+    def next_scope(
+        self, scope: Optional[ST] = None
+    ) -> ContextManager[ScopedResolver[ST]]:
+        child_resolver = ScopedResolver(
+            scoped_containers=self._scoped_containers,
+            parent=self,
+            scope=scope,
+        )
+
         @contextmanager
         def cm():
-            child_resolver = ScopedResolver(self._scoped_containers, self)
             with child_resolver.guard:
                 yield child_resolver
 
@@ -412,10 +422,17 @@ class ScopedAsyncResolver(
 ):
     _owned_resolver_cls = AsyncResolver
 
-    def next_scope(self) -> AsyncContextManager[ScopedAsyncResolver[ST]]:
+    def next_scope(
+        self, scope: Optional[ST] = None
+    ) -> AsyncContextManager[ScopedAsyncResolver[ST]]:
+        child_resolver = ScopedAsyncResolver(
+            scoped_containers=self._scoped_containers,
+            parent=self,
+            scope=scope,
+        )
+
         @asynccontextmanager
         async def cm():
-            child_resolver = ScopedAsyncResolver(self._scoped_containers, self)
             async with child_resolver.guard:
                 yield child_resolver
 
