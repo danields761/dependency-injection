@@ -7,11 +7,14 @@ from pytest import raises
 from dependency_injection.core import (
     Dependency,
     ImmutableContainer,
+    ImmutableScopedContainers,
     ScopedContainers,
     create_resolver,
     create_scoped_resolver,
 )
 from tests.helpers import A_INST, B_INST, A, B, C
+
+create_dependency = Dependency.create
 
 
 class TestResolver:
@@ -21,8 +24,8 @@ class TestResolver:
         required_type = Mock(type, name='required-type')
         types_matcher = Mock(Callable, name='types-matcher')
         container = ImmutableContainer(
-            {'a': Dependency('a', provided_type, {}, factory)},
-            types_matcher,
+            {'a': create_dependency('a', provided_type, {}, factory)},
+            types_matcher=types_matcher,
         )
 
         with create_resolver(container) as resolver:
@@ -34,7 +37,7 @@ class TestResolver:
     def test_provides_simple(self):
         a_factory = Mock(Callable, name='a-factory', return_value=A_INST)
         container = ImmutableContainer(
-            {'a': Dependency('a', A, requires={}, factory=a_factory)}
+            {'a': create_dependency('a', A, requires={}, factory=a_factory)}
         )
 
         with create_resolver(container) as resolver:
@@ -42,9 +45,7 @@ class TestResolver:
         assert a_factory.mock_calls == [call()]
 
     def test_created_value_been_memoized_v1(self):
-        container = ImmutableContainer(
-            {'a': Dependency('a', A, {}, factory=A)}
-        )
+        container = ImmutableContainer({'a': create_dependency('a', A, {}, factory=A)})
         with create_resolver(container) as resolver:
             a1 = resolver.resolve('a', A)
             a2 = resolver.resolve('a', A)
@@ -52,9 +53,7 @@ class TestResolver:
 
     def test_created_value_been_memoized_v2(self):
         a_factory = Mock(Callable, name='a-factory')
-        container = ImmutableContainer(
-            {'a': Dependency('a', A, {}, factory=a_factory)}
-        )
+        container = ImmutableContainer({'a': create_dependency('a', A, {}, factory=a_factory)})
         with create_resolver(container) as resolver:
             a1 = resolver.resolve('a', A)
             a2 = resolver.resolve('a', A)
@@ -67,9 +66,9 @@ class TestResolver:
         c_factory = Mock(Callable, name='c-factory', wraps=C)
         container = ImmutableContainer(
             {
-                'a': Dependency('a', A, {}, factory=a_factory),
-                'b': Dependency('b', B, {}, factory=b_factory),
-                'c': Dependency(
+                'a': create_dependency('a', A, {}, factory=a_factory),
+                'b': create_dependency('b', B, {}, factory=b_factory),
+                'c': create_dependency(
                     'c',
                     C,
                     {'a': ('a', A), 'b': ('b', B)},
@@ -94,9 +93,9 @@ class TestResolver:
         c_factory_mock = Mock(Callable, wraps=c_factory, name='c-factory')
         container = ImmutableContainer(
             {
-                'a': Dependency('a', A, {}, factory=lambda: A_INST),
-                'b': Dependency('b', B, {}, factory=lambda: B_INST),
-                'c': Dependency(
+                'a': create_dependency('a', A, {}, factory=lambda: A_INST),
+                'b': create_dependency('b', B, {}, factory=lambda: B_INST),
+                'c': create_dependency(
                     'c',
                     C,
                     {'a_arg': ('a', A), 'b_arg': ('b', B)},
@@ -109,16 +108,14 @@ class TestResolver:
             c_inst = resolver.resolve('c', C)
             assert c_inst.a is A_INST
             assert c_inst.b is B_INST
-            assert c_factory_mock.mock_calls == [
-                call(a_arg=A_INST, b_arg=B_INST)
-            ]
+            assert c_factory_mock.mock_calls == [call(a_arg=A_INST, b_arg=B_INST)]
 
     def test_context_manager_factory(self):
         a_cm = MagicMock(AbstractContextManager, name='a-cm')
         a_cm.__enter__.return_value = A_INST
         a_cm_factory = Mock(Callable, name='a-factory', return_value=a_cm)
         container = ImmutableContainer(
-            {'a': Dependency('a', A, {}, a_cm_factory, context_manager=True)}
+            {'a': create_dependency('a', A, {}, a_cm_factory, is_context_manager=True)}
         )
 
         with create_resolver(container) as resolver:
@@ -144,11 +141,9 @@ class TestResolver:
 
         container = ImmutableContainer(
             {
-                'a': Dependency(
-                    'a', A, {}, factory=a_cm, context_manager=True
-                ),
-                'b': Dependency('b', B, {}, factory=lambda: B_INST),
-                'c': Dependency(
+                'a': create_dependency('a', A, {}, factory=a_cm, is_context_manager=True),
+                'b': create_dependency('b', B, {}, factory=lambda: B_INST),
+                'c': create_dependency(
                     'c',
                     C,
                     {'a': ('a', A), 'b': ('b', B)},
@@ -167,8 +162,8 @@ class TestResolver:
         b_factory = Mock(Callable, name='b-factory', return_value=B_INST)
         container = ImmutableContainer(
             {
-                'a': Dependency('a', A, {'b': ('b', B)}, a_factory),
-                'b': Dependency('b', B, {'a': ('a', A)}, b_factory),
+                'a': create_dependency('a', A, {'b': ('b', B)}, a_factory),
+                'b': create_dependency('b', B, {'a': ('a', A)}, b_factory),
             }
         )
 
@@ -223,18 +218,14 @@ class TestScopedResolver:
         foo_ctrl_factory = Mock(name='foo-ctrl-factory')
         bar_ctrl_factory = Mock(name='bar-ctrl-factory')
 
-        scoped_containers = ScopedContainers(
+        scoped_containers = ImmutableScopedContainers(
             self.SCOPES_ORDER,
             {
-                'root': ImmutableContainer(
-                    {'cfg': Dependency('cfg', Cfg, {}, cfg_factory)}
-                ),
+                'root': ImmutableContainer({'cfg': create_dependency('cfg', Cfg, {}, cfg_factory)}),
                 'app': ImmutableContainer(
                     {
-                        'db': Dependency(
-                            'db', DB, {'cfg': ('cfg', Cfg)}, db_factory
-                        ),
-                        'cache': Dependency(
+                        'db': create_dependency('db', DB, {'cfg': ('cfg', Cfg)}, db_factory),
+                        'cache': create_dependency(
                             'cache',
                             Cache,
                             {'cfg': ('cfg', Cfg)},
@@ -244,19 +235,19 @@ class TestScopedResolver:
                 ),
                 'handler': ImmutableContainer(
                     {
-                        'transaction': Dependency(
+                        'transaction': create_dependency(
                             'transaction',
                             Transaction,
                             {'db': ('db', DB)},
                             transaction_factory,
                         ),
-                        'foo_ctrl': Dependency(
+                        'foo_ctrl': create_dependency(
                             'foo_ctrl',
                             FooCtrl,
                             {'transaction': ('transaction', Transaction)},
                             foo_ctrl_factory,
                         ),
-                        'bar_ctrl': Dependency(
+                        'bar_ctrl': create_dependency(
                             'bar_ctrl',
                             BarCtrl,
                             {
@@ -279,18 +270,14 @@ class TestScopedResolver:
         assert foo_ctrl is foo_ctrl_factory.return_value
         assert bar_ctrl is bar_ctrl_factory.return_value
 
-        assert foo_ctrl_factory.mock_calls == [
-            call(transaction=transaction_factory.return_value)
-        ]
+        assert foo_ctrl_factory.mock_calls == [call(transaction=transaction_factory.return_value)]
         assert bar_ctrl_factory.mock_calls == [
             call(
                 transaction=transaction_factory.return_value,
                 cache=cache_factory.return_value,
             )
         ]
-        assert transaction_factory.mock_calls == [
-            call(db=db_factory.return_value)
-        ]
+        assert transaction_factory.mock_calls == [call(db=db_factory.return_value)]
 
         assert db_factory.mock_calls == [call(cfg=cfg_factory.return_value)]
         assert cache_factory.mock_calls == [call(cfg=cfg_factory.return_value)]

@@ -1,13 +1,5 @@
 import abc
-from typing import (
-    Dict,
-    Generic,
-    Mapping,
-    Protocol,
-    Sequence,
-    TypeVar,
-    runtime_checkable,
-)
+from typing import Dict, Generic, Mapping, Protocol, Sequence, TypeVar, runtime_checkable
 
 from pytest import mark
 
@@ -138,7 +130,4 @@ def test_is_user_st_runtime_protocol(maybe_abc, excepted_result):
     ],
 )
 def test_types_consistency(type_acceptable, in_place_of, is_match):
-    assert (
-        is_type_acceptable_in_place_of(type_acceptable, in_place_of)
-        is is_match
-    )
+    assert is_type_acceptable_in_place_of(type_acceptable, in_place_of) is is_match

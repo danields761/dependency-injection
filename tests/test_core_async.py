@@ -12,18 +12,22 @@ from dependency_injection.core import (
 from dependency_injection.utils import AwaitableValue
 from tests.helpers import A_INST, A, DepOnA
 
+pytestmark = mark.usefixtures('loop')
+
+
 # Make aliases to avoid verbosity
 Dependency = AsyncDependency
 ImmutableContainer = AsyncImmutableContainer
 create_resolver = create_async_resolver
 
 
-pytestmark = mark.usefixtures('loop')
+def create_dependency(*args, is_async_factory=True, **kwargs):
+    return Dependency.create(*args, is_async_factory=is_async_factory, **kwargs)
 
 
 async def test_provides_sync_value():
     container = ImmutableContainer(
-        {'a': Dependency('a', A, {}, lambda: A_INST)}
+        {'a': create_dependency('a', A, {}, lambda: A_INST, is_async_factory=False)}
     )
     async with create_resolver(container) as resolver:
         assert await resolver.resolve('a', A) is A_INST
@@ -31,7 +35,9 @@ async def test_provides_sync_value():
 
 async def test_memoizes_sync_value_and_still_returns_awaitable():
     a_factory = Mock(Callable, name='a-factory', return_value=A_INST)
-    container = ImmutableContainer({'a': Dependency('a', A, {}, a_factory)})
+    container = ImmutableContainer(
+        {'a': create_dependency('a', A, {}, a_factory, is_async_factory=False)}
+    )
 
     async with create_resolver(container) as resolver:
         v1 = await resolver.resolve('a', A)
@@ -43,7 +49,7 @@ async def test_memoizes_sync_value_and_still_returns_awaitable():
         # Actually, this is pure internal detail, but why not test it here?
         v3_awaitable = resolver.resolve('a', A)
         assert isinstance(v3_awaitable, AwaitableValue)
-        assert v3_awaitable._value is A_INST
+        assert await v3_awaitable is A_INST
 
 
 async def test_provides_sync_cm_value():
@@ -51,7 +57,11 @@ async def test_provides_sync_cm_value():
     a_cm.__enter__.return_value = A_INST
     a_cm_factory = Mock(Callable, name='a-factory', return_value=a_cm)
     container = ImmutableContainer(
-        {'a': Dependency('a', A, {}, a_cm_factory, context_manager=True)}
+        {
+            'a': create_dependency(
+                'a', A, {}, a_cm_factory, is_async_factory=False, is_context_manager=True
+            )
+        }
     )
 
     async with create_resolver(container) as resolver:
@@ -69,9 +79,7 @@ async def test_provides_sync_cm_value():
 
 async def test_provides_async_value():
     a_factory = AsyncMock(Callable, name='a-factory', return_value=A_INST)
-    container = ImmutableContainer(
-        {'a': Dependency('a', A, {}, a_factory, async_=True)}
-    )
+    container = ImmutableContainer({'a': create_dependency('a', A, {}, a_factory)})
 
     async with create_resolver(container) as resolver:
         a = await resolver.resolve('a', A)
@@ -82,9 +90,7 @@ async def test_provides_async_value():
 
 async def test_memoizes_async_value_and_still_returns_awaitable():
     a_factory = AsyncMock(Callable, name='a-factory', return_value=A_INST)
-    container = ImmutableContainer(
-        {'a': Dependency('a', A, {}, a_factory, async_=True)}
-    )
+    container = ImmutableContainer({'a': create_dependency('a', A, {}, a_factory)})
 
     async with create_resolver(container) as resolver:
         v1 = await resolver.resolve('a', A)
@@ -99,11 +105,7 @@ async def test_provides_async_cm_value():
     a_cm.__aenter__.return_value = A_INST
     a_cm_factory = Mock(Callable, name='a-factory', return_value=a_cm)
     container = ImmutableContainer(
-        {
-            'a': Dependency(
-                'a', A, {}, a_cm_factory, context_manager=True, async_=True
-            )
-        }
+        {'a': create_dependency('a', A, {}, a_cm_factory, is_context_manager=True)}
     )
 
     async with create_resolver(container) as resolver:
@@ -126,13 +128,12 @@ async def test_async_factory_depends_on_sync():
     dep_on_a_factory = AsyncMock(Callable, name='dep-on-a', wraps=DepOnA)
     container = ImmutableContainer(
         {
-            'a': Dependency('a', A, {}, a_factory),
-            'dep_on_a': Dependency(
+            'a': create_dependency('a', A, {}, a_factory, is_async_factory=False),
+            'dep_on_a': create_dependency(
                 'dep_on_a',
                 DepOnA,
                 {'a': ('a', A)},
                 dep_on_a_factory,
-                async_=True,
             ),
         },
     )
@@ -150,12 +151,13 @@ async def test_sync_factory_depends_on_async():
     dep_on_a_factory = Mock(Callable, name='dep-on-a', wraps=DepOnA)
     container = ImmutableContainer(
         {
-            'a': Dependency('a', A, {}, a_factory, async_=True),
-            'dep_on_a': Dependency(
+            'a': create_dependency('a', A, {}, a_factory),
+            'dep_on_a': create_dependency(
                 'dep_on_a',
                 DepOnA,
                 {'a': ('a', A)},
                 dep_on_a_factory,
+                is_async_factory=False,
             ),
         },
     )

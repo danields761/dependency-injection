@@ -115,8 +115,7 @@ def is_user_st_runtime_protocol(t: Type) -> bool:
 def is_abc(t: Type) -> bool:
     t_orig = get_origin(t) or t
     return issubclass(type(t_orig), abc.ABCMeta) and (
-        not hasattr(t_orig, '_is_protocol')
-        or not getattr(t_orig, '_is_protocol')
+        not hasattr(t_orig, '_is_protocol') or not getattr(t_orig, '_is_protocol')
     )
 
 
@@ -137,9 +136,7 @@ class TypesMatcher(Protocol):
         raise NotImplementedError
 
 
-def is_type_acceptable_in_place_of(
-    type_acceptable: Type, in_place_of: Type
-) -> bool:
+def is_type_acceptable_in_place_of(type_acceptable: Type, in_place_of: Type) -> bool:
     # Vandally strip subscribed generics to their origins, anyway precise type
     # checking is not supported right now
     type_acceptable = get_origin(type_acceptable) or type_acceptable

@@ -1,11 +1,7 @@
 from __future__ import annotations
 
-from contextlib import (
-    AsyncExitStack,
-    ExitStack,
-    asynccontextmanager,
-    contextmanager,
-)
+import abc
+from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -13,26 +9,23 @@ from typing import (
     AsyncIterator,
     Awaitable,
     Callable,
-    ClassVar,
     ContextManager,
     Generic,
     Hashable,
     Iterator,
+    Literal,
     Mapping,
     Optional,
     Protocol,
     Sequence,
-    Type,
     TypeVar,
     Union,
     cast,
+    overload,
 )
 
-from dependency_injection.types_match import (
-    TypesMatcher,
-    is_type_acceptable_in_place_of,
-)
-from dependency_injection.utils import AwaitableValue
+from dependency_injection.types_match import TypesMatcher, is_type_acceptable_in_place_of
+from dependency_injection.utils import AwaitableValue, get_next_scope
 from dependency_injection.validate_containers import (
     validate_async_container,
     validate_container,
@@ -40,146 +33,257 @@ from dependency_injection.validate_containers import (
     validate_scoped_containers,
 )
 
-T = TypeVar('T', covariant=True)
-
-AnySyncFactory = Union[
-    Callable[..., T],
-    Callable[..., ContextManager[T]],
-]
-AnyAsyncFactory = Union[
-    AnySyncFactory[T],
-    Callable[..., Awaitable[T]],
-    Callable[..., AsyncContextManager[T]],
-]
-
-#: `Eager` is antonym to `Awaitable`
-Eager = Union
-
-# Exists, because this part of code abuses not even well-discussed
-# "Higher-Kinded Generics". Of course, `typing.Generic` codebase not
-# aware of such concept. This is used to denote, that given generic argument
-# can be further subscribed (ex. `Awaitable[HKA]`).
-HKV = Any
-
-#: Abbreviation for "Allowed Factories",
-#: one of `AnySyncFactory` or `AnyFactory`, Higher-Kinded
-AF = TypeVar('AF', bound=Callable)
-
-#: Abbreviation for "Value Wrapper"; one of `Eager` or `Awaitable`,
-#: Higher-Kinded
-VW = TypeVar('VW')
-
-#: Abbreviation for "Guard Type", Higher-Kinded
-GT = TypeVar('GT', ContextManager, AsyncContextManager)
-
-#: Abbreviation for "Scope Type"
-ST = TypeVar('ST', bound=Hashable)
-
-#: Abbreviation for "Dependency Type", Higher-Kinded
-DT = TypeVar('DT', bound='BaseDependency')
-
-
-@dataclass(frozen=True, unsafe_hash=True)
-class BaseDependency(Generic[T, AF]):
-    name: str
-    provides_type: Type[T]
-    requires: Mapping[str, tuple[str, Type]]
-    factory: AF[T]
-    context_manager: bool = False
-    async_: bool = False
-
-
-class BaseContainer(Protocol[DT]):
-    provides: Mapping[str, DT]
-    types_matcher: TypesMatcher
+C = TypeVar('C')
+T = TypeVar('T')
+T_cov = TypeVar('T_cov', covariant=True)
+GuardT = TypeVar('GuardT', ContextManager, AsyncContextManager)
+ScopeT = TypeVar('ScopeT', bound=Hashable)
 
 
 @dataclass(frozen=True)
-class BaseImmutableContainer(Generic[DT]):
-    provides: Mapping[str, DT]
+class CallableFactory(Generic[T_cov]):
+    create: Callable[..., T_cov]
+
+
+@dataclass(frozen=True)
+class ContextManagerFactory(Generic[T_cov]):
+    create: Callable[..., ContextManager[T_cov]]
+
+
+@dataclass(frozen=True)
+class AsyncCallableFactory(Generic[T_cov]):
+    create: Callable[..., Awaitable[T_cov]]
+
+
+@dataclass(frozen=True)
+class AsyncContextManagerFactory(Generic[T_cov]):
+    create: Callable[..., AsyncContextManager[T_cov]]
+
+
+AnySyncFactory = Union[Callable[..., T_cov], Callable[..., ContextManager[T_cov]]]
+AnyAsyncFactory = Union[
+    AnySyncFactory[T_cov],
+    Callable[..., Awaitable[T_cov]],
+    Callable[..., AsyncContextManager[T_cov]],
+]
+
+AnySyncFactoryWrapper = Union[CallableFactory[T_cov], ContextManagerFactory[T_cov]]
+AnyAsyncFactoryWrapper = Union[
+    AnySyncFactoryWrapper[T_cov],
+    AsyncCallableFactory[T_cov],
+    AsyncContextManagerFactory[T_cov],
+]
+
+
+@overload
+def _create_factory_wrapper(
+    factory: AnySyncFactoryWrapper[T], is_async: Literal[False], is_context_manager: bool
+) -> AnySyncFactoryWrapper[T]:
+    ...
+
+
+def _create_factory_wrapper(
+    factory: AnyAsyncFactoryWrapper[T], is_async: bool, is_context_manager: bool
+) -> AnyAsyncFactoryWrapper[T]:
+    factory_wrapper_cls = {
+        (False, False): CallableFactory,
+        (False, True): ContextManagerFactory,
+        (True, False): AsyncCallableFactory,
+        (True, True): AsyncContextManagerFactory,
+    }[(is_async, is_context_manager)]
+    return factory_wrapper_cls(create=factory)
+
+
+@dataclass(frozen=True)
+class BaseDependency(Generic[T_cov]):
+    name: str
+    provides_type: type[T_cov]
+    requires: Mapping[str, Union[type[Any], tuple[str, type[Any]]]]
+    factory: AnyAsyncFactoryWrapper[T_cov]
+
+
+@dataclass(frozen=True)
+class Dependency(BaseDependency[T_cov]):
+    factory: AnySyncFactoryWrapper[T_cov]
+
+    @classmethod
+    def create(
+        cls: type[C],
+        name: str,
+        provides_type: type[T_cov],
+        requires: Mapping[str, Union[type[Any], tuple[str, type[Any]]]],
+        factory: AnySyncFactory[T_cov],
+        is_context_manager: bool = False,
+    ) -> C:
+        return cls(
+            name=name,
+            provides_type=provides_type,
+            requires=requires,
+            factory=_create_factory_wrapper(factory, False, is_context_manager),
+        )
+
+
+@dataclass(frozen=True)
+class AsyncDependency(BaseDependency[T_cov]):
+    @classmethod
+    def create(
+        cls: type[C],
+        name: str,
+        provides_type: type[T_cov],
+        requires: Mapping[str, Union[type[Any], tuple[str, type[Any]]]],
+        factory: AnyAsyncFactory[T_cov],
+        is_async_factory: bool = True,
+        is_context_manager: bool = False,
+    ) -> C:
+        return cls(
+            name=name,
+            provides_type=provides_type,
+            requires=requires,
+            factory=_create_factory_wrapper(factory, is_async_factory, is_context_manager),
+        )
+
+    def as_sync_dependency(self) -> Dependency[T_cov]:
+        factory = self.factory
+        if not isinstance(factory, (CallableFactory, ContextManagerFactory)):
+            raise TypeError(
+                "Could not convert async dependency with async factories into sync dependency"
+            )
+
+        return Dependency(
+            name=self.name,
+            provides_type=self.provides_type,
+            requires=self.requires,
+            factory=factory,
+        )
+
+
+AnyDependency = Union[Dependency[T], AsyncDependency[T]]
+
+
+class BaseContainer(Protocol):
+    provides: Mapping[str, AnyDependency[Any]]
+    provides_unnamed: Sequence[AnyDependency[Any]]
+    types_matcher: TypesMatcher
+
+
+class Container(BaseContainer, Protocol):
+    provides: Mapping[str, Dependency[Any]]
+    provides_unnamed: Sequence[Dependency[Any]]
+
+
+class AsyncContainer(BaseContainer, Protocol):
+    provides: Mapping[str, AsyncDependency[Any]]
+    provides_unnamed: Sequence[AsyncDependency[Any]]
+
+
+AnyContainer = Union[Container, AsyncContainer]
+
+
+class ScopedContainers(Protocol[ScopeT]):
+    scopes_order: Sequence[ScopeT]
+    scopes: Mapping[ScopeT, Container]
+
+
+class ScopedAsyncContainers(Protocol[ScopeT]):
+    scopes_order: Sequence[ScopeT]
+    scopes: Mapping[ScopeT, AsyncContainer]
+
+
+@dataclass(frozen=True)
+class ImmutableContainer:
+    provides: Mapping[str, Dependency[Any]]
+    provides_unnamed: Sequence[Dependency[AnyDependency]] = ()
     types_matcher: TypesMatcher = is_type_acceptable_in_place_of
 
 
 @dataclass(frozen=True)
-class BaseScopedContainers(Generic[ST, DT]):
-    scopes_order: Sequence[ST]
-    scopes: Mapping[ST, BaseContainer[DT]]
+class AsyncImmutableContainer:
+    provides: Mapping[str, AsyncDependency[Any]]
+    provides_unnamed: Sequence[AsyncDependency[AnyDependency]] = ()
+    types_matcher: TypesMatcher = is_type_acceptable_in_place_of
 
 
-# Sync aliases
-Dependency = BaseDependency[T, AnySyncFactory[T]]
-Container = BaseContainer[Dependency[Any]]
-ImmutableContainer = BaseImmutableContainer[Dependency[Any]]
-ScopedContainers = BaseScopedContainers[ST, Dependency[Any]]
-# Async aliases
-AsyncDependency = BaseDependency[T, AnyAsyncFactory[T]]
-AsyncContainer = BaseContainer[AsyncDependency[Any]]
-AsyncImmutableContainer = BaseImmutableContainer[AsyncDependency[Any]]
-ScopedAsyncContainers = BaseScopedContainers[ST, AsyncContainer]
+@dataclass(frozen=True)
+class ImmutableScopedContainers(Generic[ScopeT]):
+    scopes_order: Sequence[ScopeT]
+    scopes: Mapping[ScopeT, Container]
 
 
-class _HasEnterContextManagerMethod(Protocol):
+@dataclass(frozen=True)
+class AsyncImmutableScopedContainers(Generic[ScopeT]):
+    scopes_order: Sequence[ScopeT]
+    scopes: Mapping[ScopeT, AsyncContainer]
+
+
+AnyContainersStack = Union[ScopedContainers[ScopeT], ScopedAsyncContainers[ScopeT]]
+
+
+class _HasEnterContextManager(Protocol):
     def enter_context(self, cm: ContextManager[T]) -> T:
         raise NotImplementedError
 
 
-class _HasEnterAsyncContextManager(_HasEnterContextManagerMethod, Protocol):
+class _HasEnterAsyncContextManager(_HasEnterContextManager, Protocol):
     def enter_async_context(self, cm: AsyncContextManager[T]) -> Awaitable[T]:
         raise NotImplementedError
 
 
-class BaseResolverProto(Protocol[VW, DT, GT]):
+class _HasGuard(Protocol[GuardT]):
     @property
-    def guard(self) -> GT:
-        raise NotImplementedError
-
-    def resolve(self, look_name: str, look_type: Type[T]) -> VW[T]:
+    def guard(self) -> GuardT:
         raise NotImplementedError
 
 
-class BaseResolver(Generic[VW, DT, GT]):
-    guard: GT[None]
-    finalizers_stack: _HasEnterContextManagerMethod
+class _ResolverProto(_HasGuard[ContextManager[None]], Protocol):
+    def resolve(self, look_name: Optional[str], look_type: type[T]) -> T:
+        raise NotImplementedError
 
-    def __init__(
-        self,
-        container: BaseContainer[DT],
-        unknown_resolver: Optional[Callable[[str, Type[T]], VW[T]]] = None,
-    ):
-        """
-        Init resolver.
 
-        :param container: dependencies container
-        :param unknown_resolver: if specified dependency isn't provided within
-            given container, then given callable will be tried. It's helps us
-            to chain resolvers in different ways.
-        """
-        self._container = container
-        self._resolved: dict[str, VW[Any]] = {}
-        self._unknown_resolver = unknown_resolver
+class _AsyncResolverProto(_HasGuard[AsyncContextManager[None]], Protocol):
+    def resolve(self, look_name: Optional[str], look_type: type[T]) -> Awaitable[T]:
+        raise NotImplementedError
 
-    def resolve(self, look_name: str, look_type: Type[T]) -> VW[T]:
-        dep: Optional[Dependency[T]] = None
-        dep_lookup_exc: Optional[LookupError] = None
+
+_AnyResolver = Union[_ResolverProto, _AsyncResolverProto]
+
+
+class _Resolve(Protocol):
+    def __call__(self, look_name: Optional[str], look_type: type[T]) -> T:
+        raise NotImplementedError
+
+
+class _AsyncResolve(Protocol):
+    async def __call__(self, look_name: Optional[str], look_type: type[T]) -> T:
+        raise NotImplementedError
+
+
+_AnyResolve = Union[_Resolve, _AsyncResolve]
+
+
+class BaseResolver(Generic[GuardT], abc.ABC):
+    guard: GuardT
+    finalizers_stack: Union[_HasEnterContextManager, _HasEnterAsyncContextManager]
+    _container: AnyContainer
+    _resolve_unknown: Optional[_AnyResolve]
+    _resolved_cache: dict[str, Any]
+
+    def resolve(self, look_name: Optional[str], look_type: type[T]) -> Union[T, Awaitable[T]]:
         try:
             dep = self._lookup_dep(look_name, look_type)
         except LookupError as exc:
-            if not self._unknown_resolver:
+            if self._resolve_unknown is None:
                 raise
-            dep_lookup_exc = exc
 
-        if self._unknown_resolver and dep_lookup_exc:
-            # "Unknown resolver" might help handle unknown dependency
             try:
-                return self._unknown_resolver(look_name, look_type)
-            except LookupError:
-                # Unknown resolver fails to provide dependency, then raise
-                # original lookup exception
-                raise dep_lookup_exc
+                # Try to recover via unknown resolver
+                return self._resolve_unknown(look_name, look_type)
+            except LookupError as ru_exc:
+                raise ru_exc from exc
 
         try:
-            memoized_value: VW[T] = self._resolved[dep.name]
-            return memoized_value
+            # TODO can't validate cached value type
+            memoized_value = self._resolved_cache[dep.name]
+            return cast(Union[T, Awaitable[T]], memoized_value)
         except LookupError:
             pass
 
@@ -190,218 +294,217 @@ class BaseResolver(Generic[VW, DT, GT]):
         }
         return self._create(dep, **dep_args)
 
-    def _lookup_dep(self, look_name: str, look_type: Type[T]) -> DT[T]:
+    def _lookup_dep(self, look_name: str, look_type: type[T]) -> AnyDependency[T]:
         not_found = look_name not in self._container.provides
         if not_found:
-            raise LookupError(
-                f'Dependency `{look_name}: {look_type}` not found'
-            )
+            raise LookupError(f'Dependency `{look_name}: {look_type}` not found')
 
         maybe_dep = self._container.provides[look_name]
-        if not self._container.types_matcher(
-            maybe_dep.provides_type, look_type
-        ):
+        if not self._container.types_matcher(maybe_dep.provides_type, look_type):
             raise LookupError(
                 f"Requested dependency `{look_name}: {look_type}` doesn't "
                 f'matches provided type {maybe_dep.provides_type}'
             )
-        dep: DT[T] = maybe_dep
+        # `T` is should be guarantied by types matcher
+        dep: AnyDependency[T] = maybe_dep
         return dep
 
-    def _create(self, dep: DT[T], **dep_args: VW) -> VW[T]:
+    def _create(self, dep: AnyDependency[T], **dep_args: Any) -> Union[T, Awaitable[T]]:
         raise NotImplementedError
 
 
-class BaseScopedResolver(
-    Generic[VW, DT, GT, ST], BaseResolverProto[VW, DT, GT]
-):
-    _owned_resolver_cls: ClassVar[BaseResolver[VW, DT, GT]]
+class _BaseResolverFactory(Protocol[GuardT]):
+    def __call__(
+        self, container: AnyContainer, resolve_unknown: Optional[_AnyResolve] = None
+    ) -> BaseResolver[GuardT]:
+        pass
+
+
+class BaseScopedResolver(Generic[GuardT, ScopeT], abc.ABC):
+    @property
+    @abc.abstractmethod
+    def _owned_resolver_factory(
+        self,
+    ) -> _BaseResolverFactory[GuardT]:
+        raise NotImplementedError
 
     def __init__(
         self,
-        scoped_containers: BaseScopedContainers[ST, DT],
-        parent: Optional[BaseScopedResolver[VW, DT, GT, ST]] = None,
-        scope: Optional[ST] = None,
+        scoped_containers: AnyContainersStack[ScopeT],
+        parent: Union[ScopedResolver[GuardT, ScopeT], ScopedAsyncResolver[GuardT, ScopeT]] = None,
+        scope: Optional[ScopeT] = None,
     ):
-        if parent is None:
-            first_scope = scoped_containers.scopes_order[0]
-            new_scope = first_scope
-            unknown_resolver = None
-        else:
-            try:
-                parent_scope_idx = scoped_containers.scopes_order.index(
-                    parent.scope
-                )
-            except ValueError:
-                raise ValueError(
-                    'Parent scope is not valid for given scoped containers'
-                )
-            scope_idx = parent_scope_idx + 1
-            if scope_idx >= len(scoped_containers.scopes_order):
-                raise ValueError(
-                    'No next scope available for given scoped containers'
-                )
-            new_scope = scoped_containers.scopes_order[scope_idx]
-            unknown_resolver = parent.resolve
+        new_scope = get_next_scope(
+            scoped_containers.scopes_order, None if parent is None else parent.scope
+        )
+        resolve_unknown = None if parent is None else parent.resolve
+        if scope is not None and new_scope != scope:
+            raise ValueError(
+                f'Could not enter given scope "{scope}", ' f'only "{new_scope}" is possible'
+            )
+        self._scope = new_scope
 
-        if scope is not None:
-            if new_scope != scope:
-                raise ValueError(
-                    f'Could not enter given scope "{scope}", '
-                    f'only "{new_scope}" is possible'
-                )
-        scope = new_scope
-
-        container = scoped_containers.scopes[scope]
+        container = scoped_containers.scopes[self._scope]
         # Owned resolver is required to avid mixin-usages
-        self._owned_resolver: BaseResolver[
-            VW, DT, GT
-        ] = self._owned_resolver_cls(
-            container=container, unknown_resolver=unknown_resolver
+        self._owned_resolver: BaseResolver[GuardT] = self._owned_resolver_factory(
+            container=container, resolve_unknown=resolve_unknown
         )
         self._scoped_containers = scoped_containers
-        self._scope = scope
 
     @property
-    def scope(self) -> ST:
+    def scope(self) -> ScopeT:
         return self._scope
 
     @property
-    def guard(self) -> GT[None]:
+    def guard(self) -> GuardT:
         return self._owned_resolver.guard
 
-    def resolve(self, look_name: str, look_type: Type[T]) -> VW[T]:
+    def resolve(self, look_name: str, look_type: type[T]) -> Union[T, Awaitable[T]]:
         return self._owned_resolver.resolve(look_name, look_type)
 
-    def next_scope(
-        self, scope: Optional[ST] = None
-    ) -> GT[BaseScopedResolver[VW, DT, GT, ST]]:
-        raise NotImplementedError
 
-
-def _create_dependency_as_sync(
-    resolver: BaseResolver[Any, Any, Any],
-    dep: BaseDependency[T, Any],
+def _create_dependency_sync(
+    finalizers_stack: _HasEnterContextManager,
+    dep: Dependency[T],
     **dep_args: Any,
 ) -> T:
-    """
-    Creates dependency which will live within lifespan of given resolver.
+    if isinstance(dep.factory, CallableFactory):
+        return dep.factory.create(**dep_args)
+    elif isinstance(dep.factory, ContextManagerFactory):
+        value = dep.factory.create(**dep_args)
+        return finalizers_stack.enter_context(value)
+    else:
+        raise TypeError(f'Unexpected dependency factory for dependency {dep!r}')
 
-    :param resolver: resolver
-    :param dep: dependency to provide
-    :param dep_args: dependency factory arguments
-    :return: created dependency
-    """
-    assert (
-        not dep.async_
-    ), 'Should be never called for dependencies with async factories'
 
-    value: Union[T, ContextManager[T]] = dep.factory(**dep_args)
-    if not dep.context_manager:
-        return cast(T, value)
+async def _create_dependency_async(
+    finalizers_stack: _HasEnterAsyncContextManager,
+    dep: AsyncDependency[T],
+    **dep_args: Awaitable[Any],
+) -> T:
+    ready_sub_deps = {
+        sub_dep_name: await sub_dep_awaitable
+        for sub_dep_name, sub_dep_awaitable in dep_args.items()
+    }
 
-    if not isinstance(value, ContextManager):
-        raise TypeError(
-            f'Dependency {dep.name} expected to be context manager, '
-            f'but factory returned {value}'
+    if isinstance(dep.factory, (CallableFactory, ContextManagerFactory)):
+        return _create_dependency_sync(
+            finalizers_stack,
+            dep.as_sync_dependency(),
+            **ready_sub_deps,
         )
-    return resolver.finalizers_stack.enter_context(value)
+    if isinstance(dep.factory, AsyncCallableFactory):
+        return await dep.factory.create(**ready_sub_deps)
+    elif isinstance(dep.factory, AsyncContextManagerFactory):
+        context_manager = dep.factory.create(**ready_sub_deps)
+        return await finalizers_stack.enter_async_context(context_manager)
+    else:
+        raise TypeError(f'Unexpected dependency factory for dependency {dep!r}')
 
 
-class Resolver(BaseResolver[Eager[HKV], Dependency[Any], ContextManager[HKV]]):
+class Resolver(BaseResolver[ContextManager[None]]):
     def __init__(
         self,
         container: Container,
-        unknown_resolver: Optional[Callable[[str, Type[T]], VW[T]]] = None,
+        resolve_unknown: Optional[_Resolve] = None,
     ):
-        super().__init__(container, unknown_resolver)
+        self._container = container
+        self._resolved_cache: dict[str, Any] = {}
+        self._resolve_unknown = resolve_unknown
         self.guard = self.finalizers_stack = ExitStack()
 
-    def _create(self, dep: Dependency[T], **dep_args: Any) -> Eager[T]:
-        created = _create_dependency_as_sync(self, dep, **dep_args)
-        self._resolved[dep.name] = created
+    def resolve(self, look_name: Optional[str], look_type: type[T]) -> T:
+        return cast(
+            T,
+            super().resolve(look_name, look_type),
+        )
+
+    def _lookup_dep(self, look_name: str, look_type: type[T]) -> Dependency[T]:
+        dep = super()._lookup_dep(look_name, look_type)
+        if not isinstance(dep, Dependency):
+            raise RuntimeError(
+                f"Unexpected condition: sync resolver received dependency of other type {dep!r}"
+            )
+
+        return dep
+
+    def _create(self, dep: AnyDependency[T], **dep_args: Any) -> T:
+        if not isinstance(dep, Dependency):
+            raise RuntimeError(
+                f"Unexpected condition: sync resolver received dependency of other type {dep!r}"
+            )
+
+        created = _create_dependency_sync(self.finalizers_stack, dep, **dep_args)
+        self._resolved_cache[dep.name] = created
         return created
 
 
-class AsyncResolver(
-    BaseResolver[
-        Awaitable[HKV], AsyncDependency[Any], AsyncContextManager[HKV]
-    ]
-):
-    finalizers_stack: _HasEnterAsyncContextManager
-
+class AsyncResolver(BaseResolver[AsyncContextManager[None]]):
     def __init__(
         self,
         container: AsyncContainer,
-        unknown_resolver: Optional[Callable[[str, Type[T]], VW[T]]] = None,
+        resolve_unknown: Optional[_AsyncResolve] = None,
     ):
-        super().__init__(container, unknown_resolver)
+        self._container = container
+        self._resolved_cache: dict[str, Any] = {}
+        self._resolve_unknown = resolve_unknown
         self.guard = self.finalizers_stack = AsyncExitStack()
 
-    def _create(
-        self, dep: AsyncDependency[T], **dep_args: Awaitable
-    ) -> Awaitable[T]:
-        async def create_inner():
-            ready_sub_deps = {
-                sub_dep_name: await sub_dep_awaitable
-                for sub_dep_name, sub_dep_awaitable in dep_args.items()
-            }
+    def resolve(self, look_name: Optional[str], look_type: type[T]) -> Awaitable[T]:
+        return cast(
+            Awaitable[T],
+            super().resolve(look_name, look_type),
+        )
 
-            if not dep.async_:
-                ready_value = _create_dependency_as_sync(
-                    self, dep, **ready_sub_deps
-                )
-                self._resolved[dep.name] = AwaitableValue(ready_value)
-                return ready_value
+    def _lookup_dep(self, look_name: str, look_type: type[T]) -> AsyncDependency[T]:
+        dep = super()._lookup_dep(look_name, look_type)
+        if not isinstance(dep, AsyncDependency):
+            raise RuntimeError(
+                f"Unexpected condition: async resolver received dependency of other type {dep!r}"
+            )
 
-            factored_value = dep.factory(**ready_sub_deps)
-            if not isinstance(
-                factored_value, (Awaitable, AsyncContextManager)
-            ):
-                raise TypeError(
-                    f'Dependency {dep} marked as `async_` should always '
-                    'return either '
-                    '`Awaitable[T]` or `AsyncContextManager[T]`, '
-                    f'not {factored_value!r}'
-                )
+        return dep
 
-            value: Union[
-                Awaitable[T],
-                AsyncContextManager[T],
-            ] = factored_value
-            if not dep.context_manager:
-                ready_value = await value
-            else:
-                if not isinstance(value, AsyncContextManager):
-                    raise TypeError(
-                        f'Dependency {dep} marked as '
-                        '`async_` and `context_manager` have to return '
-                        "`AsyncContextManager[T]` from it's factory, "
-                        f'not {value!r}'
-                    )
-                ready_value = await self.finalizers_stack.enter_async_context(
-                    value
-                )
+    async def _create(self, dep: AnyDependency[T], **dep_args: Any) -> T:
+        if any(not isinstance(dep, Awaitable) for dep in dep_args.values()):
+            raise RuntimeError(
+                f"Unexpected condition: not all arguments for "
+                f"async dependency is awaitables {dep_args!r}"
+            )
 
-            # Place created value into the cache as awaitable, so
-            # `BaseResolver` can simply return it's value
-            self._resolved[dep.name] = AwaitableValue(ready_value)
-            return ready_value
+        if not isinstance(dep, AsyncDependency):
+            raise RuntimeError(
+                f"Unexpected condition: async resolver received dependency of other type {dep!r}"
+            )
 
-        return create_inner()
+        value = await _create_dependency_async(self.finalizers_stack, dep, **dep_args)
+        self._resolved_cache[dep.name] = AwaitableValue(value)
+        return value
 
 
 class ScopedResolver(
-    BaseScopedResolver[Eager[HKV], Dependency[Any], ContextManager[HKV], ST],
-    Generic[ST],
+    BaseScopedResolver[ContextManager[None], ScopeT],
+    Generic[ScopeT],
 ):
-    _owned_resolver_cls = Resolver
+    _owned_resolver_factory = Resolver
 
-    def next_scope(
-        self, scope: Optional[ST] = None
-    ) -> ContextManager[ScopedResolver[ST]]:
+    def __init__(
+        self,
+        scoped_containers: ScopedContainers[ScopeT],
+        parent: Optional[ScopedResolver[ScopeT]] = None,
+        scope: Optional[ScopeT] = None,
+    ):
+        super().__init__(scoped_containers, parent=parent, scope=scope)
+
+    def resolve(self, look_name: str, look_type: type[T]) -> T:
+        return cast(
+            T,
+            super().resolve(look_name, look_type),
+        )
+
+    def next_scope(self, scope: Optional[ScopeT] = None) -> ContextManager[ScopedResolver[ScopeT]]:
         child_resolver = ScopedResolver(
-            scoped_containers=self._scoped_containers,
+            scoped_containers=cast(ScopedContainers, self._scoped_containers),
             parent=self,
             scope=scope,
         )
@@ -415,18 +518,22 @@ class ScopedResolver(
 
 
 class ScopedAsyncResolver(
-    BaseScopedResolver[
-        Awaitable[HKV], AsyncDependency[Any], AsyncContextManager[HKV], ST
-    ],
-    Generic[ST],
+    BaseScopedResolver[AsyncContextManager[None], ScopeT],
+    Generic[ScopeT],
 ):
-    _owned_resolver_cls = AsyncResolver
+    _owned_resolver_factory = AsyncResolver
+
+    def resolve(self, look_name: str, look_type: type[T]) -> Awaitable[T]:
+        return cast(
+            Awaitable[T],
+            super().resolve(look_name, look_type),
+        )
 
     def next_scope(
-        self, scope: Optional[ST] = None
-    ) -> AsyncContextManager[ScopedAsyncResolver[ST]]:
+        self, scope: Optional[ScopeT] = None
+    ) -> AsyncContextManager[ScopedAsyncResolver[ScopeT]]:
         child_resolver = ScopedAsyncResolver(
-            scoped_containers=self._scoped_containers,
+            scoped_containers=cast(ScopedAsyncContainers, self._scoped_containers),
             parent=self,
             scope=scope,
         )

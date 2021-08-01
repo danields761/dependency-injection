@@ -20,11 +20,10 @@ build-backend = "poetry.core.masonry.api"
 
 
 [tool.black]
-line-length = 79
+line-length = 100
 skip-string-normalization = true
 target-version = ["py38"]
 
 [tool.isort]
 profile = "black"
-line_length = 79
-known_first_party = ["publishing", "migrations", "tests"]
+line_length = 100
